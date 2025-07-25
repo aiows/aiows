@@ -1,0 +1,3 @@
+"""
+Event dispatcher implementation
+""" 
