@@ -85,11 +85,9 @@ class WebSocketServer:
         
         print(f"Starting WebSocket server on {host}:{port}")
         
-        start_server = websockets.serve(
-            self._handle_connection,
-            host,
-            port
-        )
-        
-        asyncio.get_event_loop().run_until_complete(start_server)
-        asyncio.get_event_loop().run_forever() 
+        asyncio.run(self._run_server(host, port))
+    
+    async def _run_server(self, host: str, port: int) -> None:
+        """Internal method to run the WebSocket server"""
+        async with websockets.serve(self._handle_connection, host, port):
+            await asyncio.Future()  # run forever 
