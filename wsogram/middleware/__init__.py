@@ -1,3 +1,0 @@
-"""
-Middleware system for wsogram
-""" 

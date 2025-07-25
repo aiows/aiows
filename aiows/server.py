@@ -10,7 +10,7 @@ from .websocket import WebSocket
 
 
 class WebSocketServer:
-    """Main WebSocket server class for wsogram framework"""
+    """Main WebSocket server class for aiows framework"""
     
     def __init__(self):
         """Initialize WebSocket server"""

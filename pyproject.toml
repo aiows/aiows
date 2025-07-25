@@ -3,10 +3,10 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wsogram"
-version = "0.0.2"
+name = "aiows"
+version = "0.0.3"
 description = "Modern WebSocket framework inspired by aiogram"
-authors = [{name = "wsogram contributors"}]
+authors = [{name = "aiows contributors"}]
 license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.8"

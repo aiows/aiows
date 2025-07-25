@@ -1,9 +1,9 @@
 """
-Simple chat example using wsogram
+Simple chat example using aiows
 """
 
-# Import main wsogram classes
-from wsogram import WebSocketServer, Router, ChatMessage, WebSocket
+# Import main aiows classes
+from aiows import WebSocketServer, Router, ChatMessage, WebSocket
 
 
 # Create router for handling events
