@@ -2,20 +2,23 @@
 WSogram - Modern WebSocket framework inspired by aiogram
 """
 
-from .server import WSogram
-from .router import Router  
+from .server import WebSocketServer
+from .router import Router
 from .websocket import WebSocket
-from .dispatcher import Dispatcher
-from .filters import Filter
-from .exceptions import WSogramException
-
-__version__ = "0.1.0"
+from .types import BaseMessage, ChatMessage, JoinRoomMessage, GameActionMessage
+from .exceptions import WSogramException, ConnectionError, MessageValidationError
 
 __all__ = [
-    "WSogram",
+    "WebSocketServer",
     "Router", 
     "WebSocket",
-    "Dispatcher",
-    "Filter",
+    "BaseMessage",
+    "ChatMessage",
+    "JoinRoomMessage", 
+    "GameActionMessage",
     "WSogramException",
-] 
+    "ConnectionError",
+    "MessageValidationError"
+]
+
+__version__ = "0.1.0" 
