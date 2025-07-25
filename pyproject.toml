@@ -3,10 +3,10 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wsogram"
-version = "0.1.0"
+name = "aiows"
+version = "0.0.4"
 description = "Modern WebSocket framework inspired by aiogram"
-authors = [{name = "wsogram contributors"}]
+authors = [{name = "aiows contributors"}]
 license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.8"
@@ -25,7 +25,7 @@ classifiers = [
 ]
 
 [project.urls]
-homepage = "https://github.com/yourusername/wsogram"
+homepage = "https://github.com/mr-akkerman/aiows"
 
 [project.optional-dependencies]
 dev = ["pytest", "black", "isort", "mypy"] 

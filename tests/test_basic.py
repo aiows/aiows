@@ -1,12 +1,12 @@
 """
-Basic tests for wsogram MVP functionality
+Basic tests for aiows MVP functionality
 """
 
 import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
-from wsogram import (
+from aiows import (
     BaseMessage, 
     ChatMessage, 
     JoinRoomMessage, 
@@ -14,11 +14,11 @@ from wsogram import (
     Router,
     WebSocketServer,
     WebSocket,
-    WSogramException,
+    AiowsException,
     ConnectionError,
     MessageValidationError
 )
-from wsogram.dispatcher import MessageDispatcher
+from aiows.dispatcher import MessageDispatcher
 
 
 class TestBaseMessage:

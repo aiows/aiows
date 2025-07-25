@@ -9,7 +9,7 @@ from .exceptions import ConnectionError
 
 
 class WebSocket:
-    """WebSocket connection wrapper for wsogram framework"""
+    """WebSocket connection wrapper for aiows framework"""
     
     def __init__(self, websocket):
         """Initialize WebSocket wrapper

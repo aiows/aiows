@@ -1,5 +1,5 @@
 """
-Type definitions for wsogram
+Type definitions for aiows
 """
 
 from datetime import datetime
