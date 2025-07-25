@@ -24,11 +24,7 @@ class Router:
         """
         def decorator(func: Callable) -> Callable:
             self._connect_handlers.append(func)
-            
-            @wraps(func)
-            def wrapper(*args, **kwargs):
-                return func(*args, **kwargs)
-            return wrapper
+            return func
         return decorator
     
     def disconnect(self):
@@ -39,11 +35,7 @@ class Router:
         """
         def decorator(func: Callable) -> Callable:
             self._disconnect_handlers.append(func)
-            
-            @wraps(func)
-            def wrapper(*args, **kwargs):
-                return func(*args, **kwargs)
-            return wrapper
+            return func
         return decorator
     
     def message(self, message_type: Optional[str] = None):
@@ -62,11 +54,7 @@ class Router:
                 'message_type': message_type
             }
             self._message_handlers.append(handler_info)
-            
-            @wraps(func)
-            def wrapper(*args, **kwargs):
-                return func(*args, **kwargs)
-            return wrapper
+            return func
         return decorator
     
     def include_router(self, router: 'Router', prefix: str = "") -> None:

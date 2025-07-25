@@ -14,7 +14,7 @@ class BaseMessage(BaseModel):
     
     def dict(self, **kwargs):
         """Serialize message to dictionary"""
-        return super().dict(**kwargs)
+        return super().model_dump(**kwargs)
 
 
 class ChatMessage(BaseMessage):
