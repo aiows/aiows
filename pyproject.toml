@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wsogram"
+version = "0.0.1"
+description = "Modern WebSocket framework inspired by aiogram"
+requires-python = ">=3.8"
+dependencies = ["pydantic>=2.0.0"]
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "isort", "mypy"] 
