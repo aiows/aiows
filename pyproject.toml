@@ -25,7 +25,7 @@ classifiers = [
 ]
 
 [project.urls]
-homepage = "https://github.com/yourusername/wsogram"
+homepage = "https://github.com/mr-akkerman/aiows"
 
 [project.optional-dependencies]
 dev = ["pytest", "black", "isort", "mypy"] 
