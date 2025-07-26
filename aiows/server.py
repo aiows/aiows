@@ -80,7 +80,9 @@ class WebSocketServer:
                     message_data = await ws_wrapper.receive_json()
                     await self.dispatcher.dispatch_message(ws_wrapper, message_data)
                 except Exception as e:
-                    print(f"Error processing message: {str(e)}")
+                    # Don't log normal connection closures (code 1000)
+                    if "1000 (OK)" not in str(e):
+                        print(f"Error processing message: {str(e)}")
                     break
                     
         except Exception as e:
