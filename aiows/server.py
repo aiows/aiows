@@ -7,6 +7,8 @@ import websockets
 from .router import Router
 from .dispatcher import MessageDispatcher
 from .websocket import WebSocket
+from .middleware.base import BaseMiddleware
+from typing import List
 
 
 class WebSocketServer:
@@ -19,6 +21,30 @@ class WebSocketServer:
         self.router: Router = Router()
         self.dispatcher: MessageDispatcher = MessageDispatcher(self.router)
         self._connections: set = set()
+        self._middleware: List[BaseMiddleware] = []
+    
+    def add_middleware(self, middleware: BaseMiddleware) -> None:
+        """Add global middleware to the server
+        
+        Args:
+            middleware: Middleware instance to add
+        """
+        self._middleware.append(middleware)
+        # Update dispatcher with new middleware
+        self._update_dispatcher_middleware()
+    
+    def _update_dispatcher_middleware(self) -> None:
+        """Update dispatcher with combined middleware from server and router"""
+        # Clear existing middleware
+        self.dispatcher._middleware.clear()
+        
+        # Add server middleware first (they execute first)
+        for middleware in self._middleware:
+            self.dispatcher.add_middleware(middleware)
+        
+        # Add router middleware (they execute after server middleware)
+        for middleware in self.router.get_all_middleware():
+            self.dispatcher.add_middleware(middleware)
     
     def include_router(self, router: Router) -> None:
         """Include router to the server
@@ -28,13 +54,14 @@ class WebSocketServer:
         """
         self.router = router
         self.dispatcher = MessageDispatcher(self.router)
+        # Apply all middleware to new dispatcher
+        self._update_dispatcher_middleware()
     
-    async def _handle_connection(self, websocket, path: str) -> None:
+    async def _handle_connection(self, websocket) -> None:
         """Handle single WebSocket connection
         
         Args:
-            websocket: Raw websocket connection
-            path: Connection path
+            websocket: Raw websocket connection (ServerConnection)
         """
         # Create WebSocket wrapper
         ws_wrapper = WebSocket(websocket)
@@ -53,7 +80,9 @@ class WebSocketServer:
                     message_data = await ws_wrapper.receive_json()
                     await self.dispatcher.dispatch_message(ws_wrapper, message_data)
                 except Exception as e:
-                    print(f"Error processing message: {str(e)}")
+                    # Don't log normal connection closures (code 1000)
+                    if "1000 (OK)" not in str(e):
+                        print(f"Error processing message: {str(e)}")
                     break
                     
         except Exception as e:
@@ -89,5 +118,9 @@ class WebSocketServer:
     
     async def _run_server(self, host: str, port: int) -> None:
         """Internal method to run the WebSocket server"""
-        async with websockets.serve(self._handle_connection, host, port):
+        # Create wrapper function that properly handles the websockets.serve callback
+        async def connection_handler(websocket):
+            await self._handle_connection(websocket)
+        
+        async with websockets.serve(connection_handler, host, port):
             await asyncio.Future()  # run forever 

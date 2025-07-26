@@ -4,6 +4,7 @@ Router implementation for WebSocket events
 
 from typing import List, Callable, Optional, Any
 from functools import wraps
+from .middleware.base import BaseMiddleware
 
 
 class Router:
@@ -15,6 +16,15 @@ class Router:
         self._disconnect_handlers: List[Callable] = []
         self._message_handlers: List[Any] = []
         self._sub_routers: List[Any] = []
+        self._middleware: List[BaseMiddleware] = []
+    
+    def add_middleware(self, middleware: BaseMiddleware) -> None:
+        """Add middleware to the router
+        
+        Args:
+            middleware: Middleware instance to add
+        """
+        self._middleware.append(middleware)
     
     def connect(self):
         """Decorator for registering connection handlers
@@ -68,4 +78,19 @@ class Router:
             'router': router,
             'prefix': prefix
         }
-        self._sub_routers.append(sub_router_info) 
+        self._sub_routers.append(sub_router_info)
+    
+    def get_all_middleware(self) -> List[BaseMiddleware]:
+        """Get all middleware including from sub-routers
+        
+        Returns:
+            Combined list of middleware from this router and sub-routers
+        """
+        all_middleware = self._middleware.copy()
+        
+        # Add middleware from sub-routers
+        for sub_router_info in self._sub_routers:
+            sub_router = sub_router_info['router']
+            all_middleware.extend(sub_router.get_all_middleware())
+        
+        return all_middleware 
