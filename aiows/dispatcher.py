@@ -2,12 +2,13 @@
 Event dispatcher implementation
 """
 
+import logging
 from .router import Router
 from .websocket import WebSocket  
 from .types import BaseMessage
-from .exceptions import MessageValidationError
+from .exceptions import MessageValidationError, MiddlewareError, ConnectionError, AiowsException
 from .middleware.base import BaseMiddleware
-from typing import List, Callable, Any
+from typing import List, Callable, Any, Optional
 
 
 class MessageDispatcher:
@@ -21,6 +22,7 @@ class MessageDispatcher:
         """
         self.router = router
         self._middleware: List[BaseMiddleware] = []
+        self.logger = logging.getLogger("aiows.dispatcher")
     
     def add_middleware(self, middleware: BaseMiddleware) -> None:
         """Add middleware to the dispatcher
@@ -29,6 +31,67 @@ class MessageDispatcher:
             middleware: Middleware instance to add
         """
         self._middleware.append(middleware)
+    
+    async def _handle_middleware_exception(
+        self, 
+        exception: Exception, 
+        middleware: BaseMiddleware, 
+        event_type: str, 
+        websocket: Optional[WebSocket] = None
+    ) -> bool:
+        """Handle middleware exceptions with appropriate logging and recovery
+        
+        Args:
+            exception: The exception that occurred
+            middleware: The middleware that raised the exception
+            event_type: Type of event being processed (connect, message, disconnect)
+            websocket: WebSocket instance if available
+            
+        Returns:
+            True if execution should continue, False if chain should be interrupted
+        """
+        middleware_name = middleware.__class__.__name__
+        
+        # Log the exception with context
+        if isinstance(exception, MiddlewareError):
+            self.logger.error(
+                f"Middleware error in {middleware_name} during {event_type}: {str(exception)}"
+            )
+            # For middleware errors, check if it's critical (like auth failure)
+            if "auth" in middleware_name.lower() or "security" in middleware_name.lower():
+                self.logger.warning(f"Critical middleware {middleware_name} failed, interrupting chain")
+                return False
+            return True
+            
+        elif isinstance(exception, ConnectionError):
+            self.logger.error(
+                f"Connection error in {middleware_name} during {event_type}: {str(exception)}"
+            )
+            # Connection errors are usually critical
+            return False
+            
+        elif isinstance(exception, MessageValidationError):
+            self.logger.warning(
+                f"Validation error in {middleware_name} during {event_type}: {str(exception)}"
+            )
+            # Validation errors should stop message processing but allow other middleware
+            if event_type == "message":
+                return False
+            return True
+            
+        elif isinstance(exception, AiowsException):
+            self.logger.error(
+                f"Framework error in {middleware_name} during {event_type}: {str(exception)}"
+            )
+            return True
+            
+        else:
+            # Unexpected exceptions
+            self.logger.exception(
+                f"Unexpected error in {middleware_name} during {event_type}: {str(exception)}"
+            )
+            # For unexpected errors, continue but log full traceback
+            return True
     
     async def _execute_connect_chain(self, websocket: WebSocket) -> None:
         """Execute the original connect logic
@@ -40,7 +103,7 @@ class MessageDispatcher:
             try:
                 await handler(websocket)
             except Exception as e:
-                print(f"Error in connect handler: {str(e)}")
+                self.logger.error(f"Error in connect handler: {str(e)}")
     
     async def _execute_disconnect_chain(self, websocket: WebSocket, reason: str) -> None:
         """Execute the original disconnect logic
@@ -53,7 +116,7 @@ class MessageDispatcher:
             try:
                 await handler(websocket, reason)
             except Exception as e:
-                print(f"Error in disconnect handler: {str(e)}")
+                self.logger.error(f"Error in disconnect handler: {str(e)}")
     
     async def _execute_message_chain(self, websocket: WebSocket, message_data: dict) -> None:
         """Execute the original message logic
@@ -85,9 +148,9 @@ class MessageDispatcher:
             try:
                 await suitable_handler(websocket, message)
             except Exception as e:
-                print(f"Error in message handler: {str(e)}")
+                self.logger.error(f"Error in message handler: {str(e)}")
         else:
-            print(f"No handler found for message type: {message_type}")
+            self.logger.warning(f"No handler found for message type: {message_type}")
     
     async def dispatch_connect(self, websocket: WebSocket) -> None:
         """Handle WebSocket connection event
@@ -95,13 +158,33 @@ class MessageDispatcher:
         Args:
             websocket: WebSocket connection instance
         """
-        # Build middleware chain
+        # Build middleware chain with exception handling
         handler = self._execute_connect_chain
         
-        # Apply middleware in reverse order
+        # Apply middleware in reverse order with exception wrapping
         for middleware in reversed(self._middleware):
             current_handler = handler
-            handler = lambda ws, mw=middleware, h=current_handler: mw.on_connect(h, ws)
+            current_middleware = middleware
+            
+            async def wrapped_handler(ws, mw=current_middleware, h=current_handler):
+                try:
+                    return await mw.on_connect(h, ws)
+                except Exception as e:
+                    should_continue = await self._handle_middleware_exception(
+                        e, mw, "connect", ws
+                    )
+                    if not should_continue:
+                        # For critical errors, close connection and stop processing
+                        if not ws.closed:
+                            try:
+                                await ws.close(code=1011, reason="Server error")
+                            except Exception:
+                                pass
+                        return
+                    # For non-critical errors, continue with original handler
+                    return await h(ws)
+            
+            handler = wrapped_handler
         
         # Execute the chain
         await handler(websocket)
@@ -113,13 +196,28 @@ class MessageDispatcher:
             websocket: WebSocket connection instance
             reason: Disconnection reason
         """
-        # Build middleware chain
+        # Build middleware chain with exception handling
         handler = self._execute_disconnect_chain
         
-        # Apply middleware in reverse order
+        # Apply middleware in reverse order with exception wrapping
         for middleware in reversed(self._middleware):
             current_handler = handler
-            handler = lambda ws, r, mw=middleware, h=current_handler: mw.on_disconnect(h, ws, r)
+            current_middleware = middleware
+            
+            async def wrapped_handler(ws, r, mw=current_middleware, h=current_handler):
+                try:
+                    return await mw.on_disconnect(h, ws, r)
+                except Exception as e:
+                    should_continue = await self._handle_middleware_exception(
+                        e, mw, "disconnect", ws
+                    )
+                    if not should_continue:
+                        # For critical errors, stop processing but don't close (already disconnecting)
+                        return
+                    # For non-critical errors, continue with original handler
+                    return await h(ws, r)
+            
+            handler = wrapped_handler
         
         # Execute the chain
         await handler(websocket, reason)
@@ -131,13 +229,29 @@ class MessageDispatcher:
             websocket: WebSocket connection instance
             message_data: Raw message data as dictionary
         """
-        # Build middleware chain
+        # Build middleware chain with exception handling
         handler = self._execute_message_chain
         
-        # Apply middleware in reverse order
+        # Apply middleware in reverse order with exception wrapping
         for middleware in reversed(self._middleware):
             current_handler = handler
-            handler = lambda ws, md, mw=middleware, h=current_handler: mw.on_message(h, ws, md)
+            current_middleware = middleware
+            
+            async def wrapped_handler(ws, data, mw=current_middleware, h=current_handler):
+                try:
+                    return await mw.on_message(h, ws, data)
+                except Exception as e:
+                    should_continue = await self._handle_middleware_exception(
+                        e, mw, "message", ws
+                    )
+                    if not should_continue:
+                        # For critical errors in message processing, stop but don't close connection
+                        # (unless it's already closed by the middleware)
+                        return
+                    # For non-critical errors, continue with original handler
+                    return await h(ws, data)
+            
+            handler = wrapped_handler
         
         # Execute the chain
         await handler(websocket, message_data) 
