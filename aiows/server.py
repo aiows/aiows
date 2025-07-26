@@ -57,12 +57,11 @@ class WebSocketServer:
         # Apply all middleware to new dispatcher
         self._update_dispatcher_middleware()
     
-    async def _handle_connection(self, websocket, path: str) -> None:
+    async def _handle_connection(self, websocket) -> None:
         """Handle single WebSocket connection
         
         Args:
-            websocket: Raw websocket connection
-            path: Connection path
+            websocket: Raw websocket connection (ServerConnection)
         """
         # Create WebSocket wrapper
         ws_wrapper = WebSocket(websocket)
@@ -117,5 +116,9 @@ class WebSocketServer:
     
     async def _run_server(self, host: str, port: int) -> None:
         """Internal method to run the WebSocket server"""
-        async with websockets.serve(self._handle_connection, host, port):
+        # Create wrapper function that properly handles the websockets.serve callback
+        async def connection_handler(websocket):
+            await self._handle_connection(websocket)
+        
+        async with websockets.serve(connection_handler, host, port):
             await asyncio.Future()  # run forever 

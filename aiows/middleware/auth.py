@@ -34,17 +34,35 @@ class AuthMiddleware(BaseMiddleware):
             Token string if found, None otherwise
         """
         try:
-            # Try to get token from authorization header
+            # Try to get token from authorization header (new API)
+            if hasattr(websocket._websocket, 'request') and websocket._websocket.request:
+                request = websocket._websocket.request
+                
+                # Check headers
+                if hasattr(request, 'headers') and request.headers:
+                    auth_header = request.headers.get('authorization') or request.headers.get('Authorization')
+                    if auth_header:
+                        # Remove 'Bearer ' prefix if present
+                        if auth_header.startswith('Bearer '):
+                            return auth_header[7:]
+                        return auth_header
+                
+                # Check query parameters from path
+                if hasattr(request, 'path') and request.path:
+                    parsed_url = urlparse(request.path)
+                    query_params = parse_qs(parsed_url.query)
+                    if 'token' in query_params:
+                        return query_params['token'][0]
+            
+            # Fallback for older API (if needed)
             if hasattr(websocket._websocket, 'request_headers'):
                 headers = websocket._websocket.request_headers
                 auth_header = headers.get('authorization') or headers.get('Authorization')
                 if auth_header:
-                    # Remove 'Bearer ' prefix if present
                     if auth_header.startswith('Bearer '):
                         return auth_header[7:]
                     return auth_header
             
-            # Try to get token from query parameters
             if hasattr(websocket._websocket, 'path'):
                 parsed_url = urlparse(websocket._websocket.path)
                 query_params = parse_qs(parsed_url.query)

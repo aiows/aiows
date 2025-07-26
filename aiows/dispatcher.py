@@ -5,7 +5,7 @@ Event dispatcher implementation
 import logging
 from .router import Router
 from .websocket import WebSocket  
-from .types import BaseMessage
+from .types import BaseMessage, ChatMessage, JoinRoomMessage, GameActionMessage
 from .exceptions import MessageValidationError, MiddlewareError, ConnectionError, AiowsException
 from .middleware.base import BaseMiddleware
 from typing import List, Callable, Any, Optional
@@ -126,14 +126,23 @@ class MessageDispatcher:
             message_data: Raw message data as dictionary
         """
         try:
-            # Try to create BaseMessage from message_data
-            message = BaseMessage(**message_data)
+            # Create appropriate message type based on message_data type
+            message_type = message_data.get('type')
+            
+            if message_type == 'chat':
+                message = ChatMessage(**message_data)
+            elif message_type == 'join_room':
+                message = JoinRoomMessage(**message_data)
+            elif message_type == 'game_action':
+                message = GameActionMessage(**message_data)
+            else:
+                # Fall back to BaseMessage for unknown types
+                message = BaseMessage(**message_data)
         except Exception as e:
             raise MessageValidationError(f"Failed to parse message: {str(e)}")
         
         # Find suitable handler by message type
         suitable_handler = None
-        message_type = message_data.get('type')
         
         for handler_info in self.router._message_handlers:
             handler_message_type = handler_info.get('message_type')

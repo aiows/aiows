@@ -4,6 +4,7 @@ WebSocket connection wrapper
 
 from typing import Dict, Any
 import json
+from datetime import datetime
 from .types import BaseMessage
 from .exceptions import ConnectionError
 
@@ -34,8 +35,14 @@ class WebSocket:
             raise ConnectionError("WebSocket connection is closed")
         
         try:
-            json_data = json.dumps(data)
-            await self._websocket.send_text(json_data)
+            # Custom JSON encoder to handle datetime objects
+            def json_serializer(obj):
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+            
+            json_data = json.dumps(data, default=json_serializer)
+            await self._websocket.send(json_data)
         except Exception as e:
             raise ConnectionError(f"Failed to send JSON data: {str(e)}")
     
@@ -63,7 +70,7 @@ class WebSocket:
             raise ConnectionError("WebSocket connection is closed")
         
         try:
-            raw_data = await self._websocket.receive_text()
+            raw_data = await self._websocket.recv()
             try:
                 return json.loads(raw_data)
             except json.JSONDecodeError as e:
