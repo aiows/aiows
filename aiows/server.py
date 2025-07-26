@@ -7,6 +7,8 @@ import websockets
 from .router import Router
 from .dispatcher import MessageDispatcher
 from .websocket import WebSocket
+from .middleware.base import BaseMiddleware
+from typing import List
 
 
 class WebSocketServer:
@@ -19,6 +21,30 @@ class WebSocketServer:
         self.router: Router = Router()
         self.dispatcher: MessageDispatcher = MessageDispatcher(self.router)
         self._connections: set = set()
+        self._middleware: List[BaseMiddleware] = []
+    
+    def add_middleware(self, middleware: BaseMiddleware) -> None:
+        """Add global middleware to the server
+        
+        Args:
+            middleware: Middleware instance to add
+        """
+        self._middleware.append(middleware)
+        # Update dispatcher with new middleware
+        self._update_dispatcher_middleware()
+    
+    def _update_dispatcher_middleware(self) -> None:
+        """Update dispatcher with combined middleware from server and router"""
+        # Clear existing middleware
+        self.dispatcher._middleware.clear()
+        
+        # Add server middleware first (they execute first)
+        for middleware in self._middleware:
+            self.dispatcher.add_middleware(middleware)
+        
+        # Add router middleware (they execute after server middleware)
+        for middleware in self.router.get_all_middleware():
+            self.dispatcher.add_middleware(middleware)
     
     def include_router(self, router: Router) -> None:
         """Include router to the server
@@ -28,6 +54,8 @@ class WebSocketServer:
         """
         self.router = router
         self.dispatcher = MessageDispatcher(self.router)
+        # Apply all middleware to new dispatcher
+        self._update_dispatcher_middleware()
     
     async def _handle_connection(self, websocket, path: str) -> None:
         """Handle single WebSocket connection
