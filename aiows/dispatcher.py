@@ -6,6 +6,8 @@ from .router import Router
 from .websocket import WebSocket  
 from .types import BaseMessage
 from .exceptions import MessageValidationError
+from .middleware.base import BaseMiddleware
+from typing import List, Callable, Any
 
 
 class MessageDispatcher:
@@ -18,9 +20,18 @@ class MessageDispatcher:
             router: Router instance containing handlers
         """
         self.router = router
+        self._middleware: List[BaseMiddleware] = []
     
-    async def dispatch_connect(self, websocket: WebSocket) -> None:
-        """Handle WebSocket connection event
+    def add_middleware(self, middleware: BaseMiddleware) -> None:
+        """Add middleware to the dispatcher
+        
+        Args:
+            middleware: Middleware instance to add
+        """
+        self._middleware.append(middleware)
+    
+    async def _execute_connect_chain(self, websocket: WebSocket) -> None:
+        """Execute the original connect logic
         
         Args:
             websocket: WebSocket connection instance
@@ -31,8 +42,8 @@ class MessageDispatcher:
             except Exception as e:
                 print(f"Error in connect handler: {str(e)}")
     
-    async def dispatch_disconnect(self, websocket: WebSocket, reason: str) -> None:
-        """Handle WebSocket disconnection event
+    async def _execute_disconnect_chain(self, websocket: WebSocket, reason: str) -> None:
+        """Execute the original disconnect logic
         
         Args:
             websocket: WebSocket connection instance
@@ -44,8 +55,8 @@ class MessageDispatcher:
             except Exception as e:
                 print(f"Error in disconnect handler: {str(e)}")
     
-    async def dispatch_message(self, websocket: WebSocket, message_data: dict) -> None:
-        """Handle WebSocket message event
+    async def _execute_message_chain(self, websocket: WebSocket, message_data: dict) -> None:
+        """Execute the original message logic
         
         Args:
             websocket: WebSocket connection instance
@@ -76,4 +87,57 @@ class MessageDispatcher:
             except Exception as e:
                 print(f"Error in message handler: {str(e)}")
         else:
-            print(f"No handler found for message type: {message_type}") 
+            print(f"No handler found for message type: {message_type}")
+    
+    async def dispatch_connect(self, websocket: WebSocket) -> None:
+        """Handle WebSocket connection event
+        
+        Args:
+            websocket: WebSocket connection instance
+        """
+        # Build middleware chain
+        handler = self._execute_connect_chain
+        
+        # Apply middleware in reverse order
+        for middleware in reversed(self._middleware):
+            current_handler = handler
+            handler = lambda ws, mw=middleware, h=current_handler: mw.on_connect(h, ws)
+        
+        # Execute the chain
+        await handler(websocket)
+    
+    async def dispatch_disconnect(self, websocket: WebSocket, reason: str) -> None:
+        """Handle WebSocket disconnection event
+        
+        Args:
+            websocket: WebSocket connection instance
+            reason: Disconnection reason
+        """
+        # Build middleware chain
+        handler = self._execute_disconnect_chain
+        
+        # Apply middleware in reverse order
+        for middleware in reversed(self._middleware):
+            current_handler = handler
+            handler = lambda ws, r, mw=middleware, h=current_handler: mw.on_disconnect(h, ws, r)
+        
+        # Execute the chain
+        await handler(websocket, reason)
+    
+    async def dispatch_message(self, websocket: WebSocket, message_data: dict) -> None:
+        """Handle WebSocket message event
+        
+        Args:
+            websocket: WebSocket connection instance
+            message_data: Raw message data as dictionary
+        """
+        # Build middleware chain
+        handler = self._execute_message_chain
+        
+        # Apply middleware in reverse order
+        for middleware in reversed(self._middleware):
+            current_handler = handler
+            handler = lambda ws, md, mw=middleware, h=current_handler: mw.on_message(h, ws, md)
+        
+        # Execute the chain
+        await handler(websocket, message_data) 
