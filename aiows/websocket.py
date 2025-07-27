@@ -2,11 +2,14 @@
 WebSocket connection wrapper
 """
 
+import logging
 from typing import Dict, Any
 import json
 from datetime import datetime
 from .types import BaseMessage
 from .exceptions import ConnectionError
+
+logger = logging.getLogger(__name__)
 
 
 class WebSocket:
@@ -79,6 +82,41 @@ class WebSocket:
             self.is_closed = True
             raise ConnectionError(f"Failed to receive JSON data: {str(e)}")
     
+    async def recv(self) -> str:
+        """Receive raw data from WebSocket
+        
+        Returns:
+            Raw string data received from WebSocket
+            
+        Raises:
+            ConnectionError: If connection is closed or receive fails
+        """
+        if self.is_closed:
+            raise ConnectionError("WebSocket connection is closed")
+        
+        try:
+            return await self._websocket.recv()
+        except Exception as e:
+            self.is_closed = True
+            raise ConnectionError(f"Failed to receive data: {str(e)}")
+    
+    async def send(self, data: str) -> None:
+        """Send raw data through WebSocket
+        
+        Args:
+            data: String data to send
+            
+        Raises:
+            ConnectionError: If connection is closed or send fails
+        """
+        if self.is_closed:
+            raise ConnectionError("WebSocket connection is closed")
+        
+        try:
+            await self._websocket.send(data)
+        except Exception as e:
+            raise ConnectionError(f"Failed to send data: {str(e)}")
+    
     async def close(self, code: int = 1000, reason: str = "") -> None:
         """Close WebSocket connection
         
@@ -89,9 +127,9 @@ class WebSocket:
         if not self.is_closed:
             try:
                 await self._websocket.close(code=code, reason=reason)
-                print(f"WebSocket connection closed gracefully with code {code}")
+                logger.debug(f"WebSocket connection closed gracefully with code {code}")
             except Exception as e:
-                print(f"Error during WebSocket close: {str(e)}")
+                logger.debug(f"Error during WebSocket close: {str(e)}")
             finally:
                 self.is_closed = True
     
