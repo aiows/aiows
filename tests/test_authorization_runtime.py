@@ -12,9 +12,12 @@ Tests authorization (what users can do) beyond authentication (who they are):
 import pytest
 import asyncio
 import json
+import logging
 import threading
 import socket
 import time
+from io import StringIO
+from unittest.mock import patch
 from typing import Optional, Set, Dict, Any
 
 try:
@@ -28,8 +31,11 @@ from aiows import (
     WebSocket, 
     BaseMessage,
     AuthMiddleware,
+    LoggingMiddleware,
+    RateLimitingMiddleware,
     BaseMiddleware
 )
+from aiows.middleware.auth import generate_auth_token
 
 
 # =============================================================================
@@ -118,10 +124,13 @@ class ResourceAuthorizationMiddleware(BaseMiddleware):
     def __init__(self):
         # Mock database of user room memberships
         self.user_rooms = {
+            'user': {'room1', 'room2'},  # simple user id for tests
             'user1': {'room1', 'room2'},
             'user2': {'room2', 'room3'},
+            'admin': {'room1', 'room2', 'room3', 'admin_room'},  # simple admin id for tests
             'admin1': {'room1', 'room2', 'room3', 'admin_room'},
             'mod1': {'room1', 'room2'},
+            'guest': {'room1'},  # simple guest id for tests
             'guest1': {'room1'},  # guests can only access room1
         }
     
@@ -284,13 +293,21 @@ class TestRoleBasedAuthorization:
             'guest': {'send_message'}
         }
         
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         role_middleware = RoleAuthorizationMiddleware(role_permissions)
         
         uri = auth_test_server.start_server_with_auth_middleware([auth_middleware, role_middleware])
         
         # Connect as admin
-        admin_uri = f"{uri}?token=admin1secret_key"
+        # Generate valid JWT token
+        jwt_token = generate_auth_token(
+            user_id="admin",
+            secret_key=secret_key,
+            ttl_seconds=300
+        )
+        
+        admin_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(admin_uri) as websocket:
             # Get connection response
@@ -319,13 +336,21 @@ class TestRoleBasedAuthorization:
             'user': {'send_message', 'join_room'},
         }
         
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         role_middleware = RoleAuthorizationMiddleware(role_permissions)
         
         uri = auth_test_server.start_server_with_auth_middleware([auth_middleware, role_middleware])
         
         # Connect as regular user
-        user_uri = f"{uri}?token=user1secret_key"
+        # Generate valid JWT token
+        jwt_token = generate_auth_token(
+            user_id="user",
+            secret_key=secret_key,
+            ttl_seconds=300
+        )
+        
+        user_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(user_uri) as websocket:
             # Get connection response
@@ -355,13 +380,21 @@ class TestRoleBasedAuthorization:
             'user': {'send_message', 'join_room'},
         }
         
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         role_middleware = RoleAuthorizationMiddleware(role_permissions)
         
         uri = auth_test_server.start_server_with_auth_middleware([auth_middleware, role_middleware])
         
         # Connect as moderator
-        mod_uri = f"{uri}?token=mod1secret_key"
+        # Generate valid JWT token
+        jwt_token = generate_auth_token(
+            user_id="mod",
+            secret_key=secret_key,
+            ttl_seconds=300
+        )
+        
+        mod_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(mod_uri) as websocket:
             # Get connection response
@@ -393,13 +426,21 @@ class TestResourceBasedAuthorization:
     @pytest.mark.asyncio
     async def test_room_access_granted(self, auth_test_server):
         """Test user can access allowed room"""
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         resource_middleware = ResourceAuthorizationMiddleware()
         
         uri = auth_test_server.start_server_with_auth_middleware([auth_middleware, resource_middleware])
         
         # user1 has access to room1 and room2
-        user_uri = f"{uri}?token=user1secret_key"
+        # Generate valid JWT token
+        jwt_token = generate_auth_token(
+            user_id="user",
+            secret_key=secret_key,
+            ttl_seconds=300
+        )
+        
+        user_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(user_uri) as websocket:
             await websocket.recv()  # Skip connection message
@@ -420,13 +461,21 @@ class TestResourceBasedAuthorization:
     @pytest.mark.asyncio
     async def test_room_access_denied(self, auth_test_server):
         """Test user cannot access restricted room"""
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         resource_middleware = ResourceAuthorizationMiddleware()
         
         uri = auth_test_server.start_server_with_auth_middleware([auth_middleware, resource_middleware])
         
         # user1 does NOT have access to room3
-        user_uri = f"{uri}?token=user1secret_key"
+        # Generate valid JWT token
+        jwt_token = generate_auth_token(
+            user_id="user",
+            secret_key=secret_key,
+            ttl_seconds=300
+        )
+        
+        user_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(user_uri) as websocket:
             await websocket.recv()  # Skip connection message
@@ -447,13 +496,21 @@ class TestResourceBasedAuthorization:
     @pytest.mark.asyncio
     async def test_admin_room_access(self, auth_test_server):
         """Test admin can access all rooms including admin rooms"""
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         resource_middleware = ResourceAuthorizationMiddleware()
         
         uri = auth_test_server.start_server_with_auth_middleware([auth_middleware, resource_middleware])
         
         # admin1 has access to admin_room
-        admin_uri = f"{uri}?token=admin1secret_key"
+        # Generate valid JWT token
+        jwt_token = generate_auth_token(
+            user_id="admin",
+            secret_key=secret_key,
+            ttl_seconds=300
+        )
+        
+        admin_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(admin_uri) as websocket:
             await websocket.recv()  # Skip connection message
@@ -474,13 +531,21 @@ class TestResourceBasedAuthorization:
     @pytest.mark.asyncio
     async def test_guest_limited_access(self, auth_test_server):
         """Test guest has very limited room access"""
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         resource_middleware = ResourceAuthorizationMiddleware()
         
         uri = auth_test_server.start_server_with_auth_middleware([auth_middleware, resource_middleware])
         
         # guest1 only has access to room1
-        guest_uri = f"{uri}?token=guest1secret_key"
+        # Generate valid JWT token
+        jwt_token = generate_auth_token(
+            user_id="guest",
+            secret_key=secret_key,
+            ttl_seconds=300
+        )
+        
+        guest_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(guest_uri) as websocket:
             await websocket.recv()  # Skip connection message
@@ -513,7 +578,8 @@ class TestCombinedAuthorization:
             'user': {'send_message', 'join_room'},
         }
         
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         role_middleware = RoleAuthorizationMiddleware(role_permissions)
         resource_middleware = ResourceAuthorizationMiddleware()
         
@@ -522,7 +588,14 @@ class TestCombinedAuthorization:
         ])
         
         # user1 is 'user' role and has access to room1, room2
-        user_uri = f"{uri}?token=user1secret_key"
+        # Generate valid JWT token
+        jwt_token = generate_auth_token(
+            user_id="user",
+            secret_key=secret_key,
+            ttl_seconds=300
+        )
+        
+        user_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(user_uri) as websocket:
             response = await websocket.recv()
