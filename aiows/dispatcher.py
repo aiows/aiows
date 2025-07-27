@@ -266,97 +266,144 @@ class _MiddlewareChainExecutor:
         self.middleware_list = middleware_list
         self.dispatcher = dispatcher
     
+    def cleanup(self) -> None:
+        """Explicit cleanup to prevent memory leaks"""
+        self.middleware_list.clear()
+        self.dispatcher = None
+    
     async def execute_connect_chain(self, websocket: WebSocket) -> None:
-        """Execute connect middleware chain"""
-        return await self._execute_chain(
-            "connect",
-            self.dispatcher._execute_connect_chain,
-            websocket
-        )
+        """Execute connect middleware chain without closures"""
+        try:
+            await self._execute_chain_iterative("connect", websocket)
+        finally:
+            self.cleanup()
     
     async def execute_disconnect_chain(self, websocket: WebSocket, reason: str) -> None:
-        """Execute disconnect middleware chain"""
-        return await self._execute_chain(
-            "disconnect", 
-            self.dispatcher._execute_disconnect_chain,
-            websocket,
-            reason
-        )
+        """Execute disconnect middleware chain without closures"""
+        try:
+            await self._execute_chain_iterative("disconnect", websocket, reason)
+        finally:
+            self.cleanup()
     
     async def execute_message_chain(self, websocket: WebSocket, message_data: dict) -> None:
-        """Execute message middleware chain"""
-        return await self._execute_chain(
-            "message",
-            self.dispatcher._execute_message_chain,
-            websocket,
-            message_data
-        )
+        """Execute message middleware chain without closures"""
+        try:
+            await self._execute_chain_iterative("message", websocket, message_data)
+        finally:
+            self.cleanup()
     
-    async def _execute_chain(self, event_type: str, final_handler: Callable, *args) -> None:
-        """Execute middleware chain without closures to prevent memory leaks"""
+    async def _execute_chain_iterative(self, event_type: str, *args) -> None:
+        """Execute middleware chain iteratively using stack without closures"""
         
         # If no middleware, execute final handler directly
         if not self.middleware_list:
-            return await final_handler(*args)
-        
-        # Create execution stack without closures
-        # Middleware should execute in the order they were added (not reversed)
-        stack = [(mw, event_type) for mw in self.middleware_list]
-        stack.append((None, event_type))  # Final handler marker
-        
-        return await self._execute_middleware_stack(stack, final_handler, *args)
-    
-    async def _execute_middleware_stack(
-        self, 
-        stack: List, 
-        final_handler: Callable, 
-        *args
-    ) -> None:
-        """Execute middleware stack iteratively to avoid memory leaks"""
-        
-        if not stack:
+            await self._execute_final_handler(event_type, *args)
             return
         
-        current_middleware, event_type = stack.pop(0)
+        # Create execution context that avoids closures
+        context = _MiddlewareExecutionContext(
+            self.middleware_list,
+            self.dispatcher,
+            event_type,
+            args
+        )
         
-        if current_middleware is None:
-            # Reached final handler
-            return await final_handler(*args)
+        # Start execution from the first middleware
+        await context.execute_from_index(0)
+    
+    async def _execute_final_handler(self, event_type: str, *args) -> None:
+        """Execute the final handler based on event type"""
+        if event_type == "connect":
+            await self.dispatcher._execute_connect_chain(*args)
+        elif event_type == "disconnect":
+            await self.dispatcher._execute_disconnect_chain(*args)
+        elif event_type == "message":
+            await self.dispatcher._execute_message_chain(*args)
+        else:
+            raise ValueError(f"Unknown event type: {event_type}")
+
+
+class _MiddlewareExecutionContext:
+    """Context for executing middleware without creating closures"""
+    
+    def __init__(self, middleware_list: List[BaseMiddleware], dispatcher: MessageDispatcher, event_type: str, args: tuple):
+        self.middleware_list = middleware_list
+        self.dispatcher = dispatcher
+        self.event_type = event_type
+        self.args = args
+    
+    async def execute_from_index(self, index: int) -> None:
+        """Execute middleware chain starting from given index"""
+        
+        # If we've reached the end, execute final handler
+        if index >= len(self.middleware_list):
+            await self._execute_final_handler()
+            return
+        
+        # Get current middleware
+        current_middleware = self.middleware_list[index]
         
         try:
-            # Create next handler for this middleware
-            async def next_handler(*handler_args):
-                return await self._execute_middleware_stack(stack, final_handler, *handler_args)
+            # Create next handler for this specific index
+            next_handler = _NextHandler(self, index + 1)
             
             # Execute middleware based on event type
-            if event_type == "connect":
-                return await current_middleware.on_connect(next_handler, *args)
-            elif event_type == "disconnect":
-                return await current_middleware.on_disconnect(next_handler, *args)
-            elif event_type == "message":
-                return await current_middleware.on_message(next_handler, *args)
+            if self.event_type == "connect":
+                await current_middleware.on_connect(next_handler.call, *self.args)
+            elif self.event_type == "disconnect":
+                await current_middleware.on_disconnect(next_handler.call, *self.args)
+            elif self.event_type == "message":
+                await current_middleware.on_message(next_handler.call, *self.args)
             else:
-                raise ValueError(f"Unknown event type: {event_type}")
+                raise ValueError(f"Unknown event type: {self.event_type}")
                 
         except Exception as e:
-            # Get websocket from args for exception handling
-            websocket = args[0] if args and hasattr(args[0], 'context') else None
+            # Handle middleware exception
+            websocket = self.args[0] if self.args and hasattr(self.args[0], 'context') else None
             
             should_continue = await self.dispatcher._handle_middleware_exception(
-                e, current_middleware, event_type, websocket
+                e, current_middleware, self.event_type, websocket
             )
             
             if not should_continue:
-                # For critical errors, handle appropriately based on event type
-                if event_type == "connect" and websocket and not websocket.closed:
+                # For critical errors, handle appropriately
+                if self.event_type == "connect" and websocket and not websocket.closed:
                     try:
                         await websocket.close(code=1011, reason="Server error")
                     except Exception:
                         pass
                 return
             
-            # For non-critical errors, continue with remaining stack
-            return await self._execute_middleware_stack(stack, final_handler, *args)
+            # For non-critical errors, continue with next middleware
+            await self.execute_from_index(index + 1)
+    
+    async def _execute_final_handler(self) -> None:
+        """Execute the final handler based on event type"""
+        if self.event_type == "connect":
+            await self.dispatcher._execute_connect_chain(*self.args)
+        elif self.event_type == "disconnect":
+            await self.dispatcher._execute_disconnect_chain(*self.args)
+        elif self.event_type == "message":
+            await self.dispatcher._execute_message_chain(*self.args)
+        else:
+            raise ValueError(f"Unknown event type: {self.event_type}")
+
+
+class _NextHandler:
+    """Next handler that avoids closures by storing context and index"""
+    
+    def __init__(self, context: _MiddlewareExecutionContext, next_index: int):
+        self.context = context
+        self.next_index = next_index
+    
+    async def call(self, *args) -> None:
+        """Call the next middleware in the chain"""
+        # Update args in context if they were modified
+        if args:
+            self.context.args = args
+        
+        # Continue execution from next index
+        await self.context.execute_from_index(self.next_index)
 
 
  
