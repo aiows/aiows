@@ -294,7 +294,7 @@ class TestRoleBasedAuthorization:
         }
         
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
         role_middleware = RoleAuthorizationMiddleware(role_permissions)
         
         uri = auth_test_server.start_server_with_auth_middleware([auth_middleware, role_middleware])
@@ -337,7 +337,7 @@ class TestRoleBasedAuthorization:
         }
         
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
         role_middleware = RoleAuthorizationMiddleware(role_permissions)
         
         uri = auth_test_server.start_server_with_auth_middleware([auth_middleware, role_middleware])
@@ -381,7 +381,7 @@ class TestRoleBasedAuthorization:
         }
         
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
         role_middleware = RoleAuthorizationMiddleware(role_permissions)
         
         uri = auth_test_server.start_server_with_auth_middleware([auth_middleware, role_middleware])
@@ -427,7 +427,7 @@ class TestResourceBasedAuthorization:
     async def test_room_access_granted(self, auth_test_server):
         """Test user can access allowed room"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
         resource_middleware = ResourceAuthorizationMiddleware()
         
         uri = auth_test_server.start_server_with_auth_middleware([auth_middleware, resource_middleware])
@@ -462,7 +462,7 @@ class TestResourceBasedAuthorization:
     async def test_room_access_denied(self, auth_test_server):
         """Test user cannot access restricted room"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
         resource_middleware = ResourceAuthorizationMiddleware()
         
         uri = auth_test_server.start_server_with_auth_middleware([auth_middleware, resource_middleware])
@@ -497,7 +497,7 @@ class TestResourceBasedAuthorization:
     async def test_admin_room_access(self, auth_test_server):
         """Test admin can access all rooms including admin rooms"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
         resource_middleware = ResourceAuthorizationMiddleware()
         
         uri = auth_test_server.start_server_with_auth_middleware([auth_middleware, resource_middleware])
@@ -532,7 +532,7 @@ class TestResourceBasedAuthorization:
     async def test_guest_limited_access(self, auth_test_server):
         """Test guest has very limited room access"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
         resource_middleware = ResourceAuthorizationMiddleware()
         
         uri = auth_test_server.start_server_with_auth_middleware([auth_middleware, resource_middleware])
@@ -579,7 +579,7 @@ class TestCombinedAuthorization:
         }
         
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
         role_middleware = RoleAuthorizationMiddleware(role_permissions)
         resource_middleware = ResourceAuthorizationMiddleware()
         
