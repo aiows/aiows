@@ -322,6 +322,29 @@ class TestWebSocketWrapperMethods:
         
         with pytest.raises(AiowsConnectionError):
             await websocket.send_json({"type": "test"})
+    
+    def test_remote_address_property(self):
+        """Test WebSocket remote_address property"""
+        # Test with normal remote address
+        mock_websocket = Mock()
+        mock_websocket.remote_address = ('127.0.0.1', 12345)
+        
+        websocket = WebSocket(mock_websocket)
+        assert websocket.remote_address == ('127.0.0.1', 12345)
+        
+        # Test with missing remote address (mock without remote_address)
+        mock_websocket2 = Mock(spec=[])  # Empty spec means no attributes
+        
+        websocket2 = WebSocket(mock_websocket2)
+        assert websocket2.remote_address == ('unknown', 0)
+        
+        # Test fallback behavior with simple object
+        class SimpleWebSocket:
+            pass
+        
+        simple_ws = SimpleWebSocket()
+        websocket3 = WebSocket(simple_ws)
+        assert websocket3.remote_address == ('unknown', 0)
 
 
 class TestDispatcherRouting:

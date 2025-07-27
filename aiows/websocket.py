@@ -253,6 +253,18 @@ class WebSocket:
         """
         return self._is_closed
     
+    @property
+    def remote_address(self) -> tuple:
+        """Get remote address of the WebSocket connection
+        
+        Returns:
+            Tuple of (host, port) or ('unknown', 0) if not available
+        """
+        try:
+            return getattr(self._websocket, 'remote_address', ('unknown', 0))
+        except Exception:
+            return ('unknown', 0)
+    
     def set_operation_timeout(self, timeout: float) -> None:
         """Set timeout for WebSocket operations
         

@@ -10,6 +10,7 @@ Modern WebSocket framework for Python inspired by aiogram. Build real-time appli
 - **Context management** for connection-specific data
 - **Built-in authentication** with token support
 - **DDoS protection** with IP-based connection limiting and rate limiting
+- **Graceful shutdown** with signal handlers and connection cleanup
 - **Exception handling** with graceful error recovery
 - **Production ready** with comprehensive test coverage
 
@@ -47,6 +48,11 @@ async def on_disconnect(websocket: WebSocket, reason: str):
 # Create and run server
 server = WebSocketServer()
 server.include_router(router)
+
+# Optional: Configure graceful shutdown timeout
+server.set_shutdown_timeout(15.0)
+
+# Start server (supports graceful shutdown with Ctrl+C)
 server.run(host="localhost", port=8000)
 ```
 
@@ -187,6 +193,100 @@ async def handle_data(websocket: WebSocket, message: BaseMessage):
         await websocket.send_json({"error": "Internal server error"})
 ```
 
+## Graceful Shutdown
+
+aiows provides robust graceful shutdown mechanisms for production deployments with proper connection cleanup and signal handling.
+
+### Signal Handlers
+
+Automatic graceful shutdown on SIGTERM and SIGINT (Ctrl+C):
+
+```python
+from aiows import WebSocketServer, Router
+
+server = WebSocketServer()
+router = Router()
+
+# Configure graceful shutdown timeout (default: 30 seconds)
+server.set_shutdown_timeout(15.0)
+
+@router.connect()
+async def on_connect(websocket: WebSocket):
+    await websocket.send_json({"type": "connected"})
+
+server.include_router(router)
+
+# Signal handlers automatically registered
+server.run("localhost", 8000)
+# Press Ctrl+C for graceful shutdown
+```
+
+### Programmatic Shutdown
+
+Trigger graceful shutdown from code:
+
+```python
+@router.message("admin_shutdown")
+async def handle_admin_shutdown(websocket: WebSocket, message: BaseMessage):
+    # Notify client of shutdown
+    await websocket.send_json({
+        "type": "shutdown_initiated", 
+        "message": "Server shutting down gracefully..."
+    })
+    
+    # Trigger graceful shutdown with custom timeout
+    await server.shutdown(timeout=10.0)
+```
+
+### Shutdown Process
+
+1. **Signal Detection** - SIGTERM/SIGINT triggers shutdown
+2. **Connection Notification** - All connections receive disconnect events
+3. **Graceful Close** - WebSocket close frames sent with code 1001
+4. **Timeout Protection** - Force close after timeout if needed
+5. **Resource Cleanup** - Memory and temporary files cleaned up
+
+### Advanced Configuration
+
+```python
+server = WebSocketServer()
+
+# Configure shutdown behavior
+server.set_shutdown_timeout(30.0)  # 30 seconds for graceful close
+
+# Check shutdown state
+if server.is_shutting_down:
+    print("Server is in shutdown process")
+
+# Custom shutdown logic
+@router.disconnect()
+async def on_disconnect(websocket: WebSocket, reason: str):
+    if reason == "Server shutdown":
+        # Handle shutdown-specific cleanup
+        await cleanup_user_session(websocket)
+    else:
+        # Handle normal disconnection
+        await log_disconnection(websocket, reason)
+```
+
+### Docker Integration
+
+For Docker containers, graceful shutdown works seamlessly:
+
+```dockerfile
+FROM python:3.11-slim
+
+COPY . /app
+WORKDIR /app
+
+RUN pip install aiows
+
+# Graceful shutdown on container stop
+CMD ["python", "server.py"]
+```
+
+The server will receive SIGTERM from `docker stop` and shutdown gracefully within the configured timeout.
+
 ## Custom Middleware
 
 ```python
@@ -231,14 +331,21 @@ pytest tests/
 
 Check out `/examples` directory:
 - `simple_chat.py` - Basic chat server
-- `middleware_example.py` - Authentication and middleware usage
+- `middleware_example.py` - Authentication and middleware usage  
+- `graceful_shutdown_example.py` - Graceful shutdown demonstration
+- `connection_limiter_example.py` - DDoS protection example
+- `validation_example.py` - Message validation example
 
 ## API Reference
 
 ### WebSocketServer
 - `add_middleware(middleware)` - Add global middleware
 - `include_router(router)` - Add router with handlers
-- `run(host, port)` - Start the server
+- `run(host, port)` - Start the server (blocking)
+- `serve(host, port)` - Start the server (async)
+- `shutdown(timeout=None)` - Trigger graceful shutdown
+- `set_shutdown_timeout(timeout)` - Configure shutdown timeout
+- `is_shutting_down` - Check if server is shutting down
 
 ### Router  
 - `@router.connect()` - Connection handler decorator
