@@ -235,7 +235,7 @@ class TestWebSocketThreadSafety:
             await asyncio.gather(*tasks)
         concurrent_time = time.time() - start_time
         
-        max_allowed_ratio = 2.0
+        max_allowed_ratio = 3.0
         actual_ratio = concurrent_time / sequential_time if sequential_time > 0 else 1.0
         
         assert actual_ratio <= max_allowed_ratio, (

@@ -276,7 +276,7 @@ class TestDispatcherThreadSafety:
         
         start_time = time.time()
         for i in range(100):
-            message_data = {"type": "chat", "text": f"seq_{i}", "user_id": i}
+            message_data = {"type": "chat", "text": f"valid message {i+1}", "user_id": i+1}
             await dispatcher.dispatch_message(websocket_wrapper, message_data)
         sequential_time = time.time() - start_time
         
@@ -287,7 +287,7 @@ class TestDispatcherThreadSafety:
         for i in range(0, 100, batch_size):
             tasks = []
             for j in range(i, min(i + batch_size, 100)):
-                message_data = {"type": "chat", "text": f"conc_{j}", "user_id": j}
+                message_data = {"type": "chat", "text": f"batch message {j+1}", "user_id": j+1}
                 tasks.append(dispatcher.dispatch_message(websocket_wrapper, message_data))
             await asyncio.gather(*tasks)
         concurrent_time = time.time() - start_time
