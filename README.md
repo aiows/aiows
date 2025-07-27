@@ -176,6 +176,60 @@ async def on_action(websocket: WebSocket, message: BaseMessage):
         return
 ```
 
+## Connection Monitoring
+
+aiows provides real-time monitoring capabilities for tracking active connections and preventing memory leaks:
+
+```python
+from aiows import WebSocketServer, Router
+
+server = WebSocketServer()
+router = Router()
+
+@router.connect()
+async def on_connect(websocket: WebSocket):
+    # Get current connection stats
+    active_count = server.get_active_connections_count()
+    total_count = server.get_total_connections_count()
+    
+    await websocket.send_json({
+        "type": "connected",
+        "active_connections": active_count,
+        "total_connections": total_count
+    })
+
+@router.message("stats")
+async def get_stats(websocket: WebSocket, message: BaseMessage):
+    # Get comprehensive connection statistics
+    stats = server.get_connection_stats()
+    await websocket.send_json({
+        "type": "server_stats",
+        "stats": stats
+    })
+    # Example response:
+    # {
+    #   "active_connections": 15,
+    #   "total_connections": 1247,
+    #   "connection_count_tracked": 15
+    # }
+
+server.include_router(router)
+server.run("localhost", 8000)
+```
+
+### Memory Management Features
+
+- **WeakSet Storage** - Automatic cleanup of dead connection references
+- **Periodic Cleanup** - Orphaned connections cleaned every 30 seconds  
+- **Memory Leak Prevention** - Proper cleanup even on sudden disconnects
+- **Real-time Monitoring** - Track active/total connection counts
+
+### Monitoring Methods
+
+- `get_active_connections_count()` - Current number of active connections
+- `get_total_connections_count()` - Total connections since server start
+- `get_connection_stats()` - Comprehensive connection statistics
+
 ## Error Handling
 
 ```python
@@ -346,6 +400,9 @@ Check out `/examples` directory:
 - `shutdown(timeout=None)` - Trigger graceful shutdown
 - `set_shutdown_timeout(timeout)` - Configure shutdown timeout
 - `is_shutting_down` - Check if server is shutting down
+- `get_active_connections_count()` - Get current active connections count
+- `get_total_connections_count()` - Get total connections since server start
+- `get_connection_stats()` - Get comprehensive connection statistics
 
 ### Router  
 - `@router.connect()` - Connection handler decorator
