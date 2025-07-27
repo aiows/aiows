@@ -154,8 +154,8 @@ class TestMemoryManagement:
             await dispatcher.dispatch_connect(mock_websocket)
             await dispatcher.dispatch_message(mock_websocket, {
                 'type': 'chat', 
-                'content': f'test message {i}',
-                'user_id': f'user_{i}'
+                'text': f'test message {i}',  # text вместо content
+                'user_id': i  # integer вместо string
             })
             await dispatcher.dispatch_disconnect(mock_websocket, f"test reason {i}")
             
@@ -187,8 +187,8 @@ class TestMemoryManagement:
         await dispatcher.dispatch_connect(mock_websocket)
         await dispatcher.dispatch_message(mock_websocket, {
             'type': 'chat',
-            'content': 'test',
-            'user_id': 'test_user'
+            'text': 'test',  # text вместо content
+            'user_id': 12345  # integer вместо string
         })
         await dispatcher.dispatch_disconnect(mock_websocket, "test")
         
@@ -265,8 +265,8 @@ class TestMemoryManagement:
             for i in range(5):
                 await dispatcher.dispatch_message(websocket, {
                     'type': 'chat',
-                    'content': f'stress message {i}',
-                    'user_id': f'stress_user_{i}'
+                    'text': f'stress message {i}',
+                    'user_id': i + 1000  # integer вместо string
                 })
             
             await dispatcher.dispatch_disconnect(websocket, "stress test completed")
@@ -326,8 +326,8 @@ class TestMemoryManagement:
             await dispatcher.dispatch_connect(mock_websocket)
             await dispatcher.dispatch_message(mock_websocket, {
                 'type': 'chat',
-                'content': f'performance test {i}',
-                'user_id': f'perf_user_{i}'
+                'text': f'performance test {i}',
+                'user_id': i + 2000  # integer вместо string
             })
             await dispatcher.dispatch_disconnect(mock_websocket, f"perf test {i}")
         
