@@ -33,6 +33,7 @@ from aiows import (
     LoggingMiddleware,
     RateLimitingMiddleware
 )
+from aiows.middleware.auth import generate_auth_token
 
 
 # =============================================================================
@@ -143,11 +144,19 @@ class TestAuthMiddlewareRuntime:
     @pytest.mark.asyncio
     async def test_valid_token_authentication(self, test_runtime_server):
         """Test authentication with valid token"""
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
+        # Generate valid JWT token
+        jwt_token = generate_auth_token(
+            user_id="user123",
+            secret_key=secret_key,
+            ttl_seconds=300
+        )
+        
         # Connect with valid token in query
-        valid_uri = f"{uri}?token=user123secret_key"
+        valid_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(valid_uri) as websocket:
             # Should receive connection message with user info
@@ -161,11 +170,19 @@ class TestAuthMiddlewareRuntime:
     @pytest.mark.asyncio
     async def test_valid_token_in_headers(self, test_runtime_server):
         """Test authentication with token in Authorization header"""
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
+        # Generate valid JWT token
+        jwt_token = generate_auth_token(
+            user_id="user456",
+            secret_key=secret_key,
+            ttl_seconds=300
+        )
+        
         # Connect with Bearer token in headers
-        headers = {"Authorization": "Bearer user456secret_key"}
+        headers = {"Authorization": f"Bearer {jwt_token}"}
         
         async with websockets.connect(uri, additional_headers=headers) as websocket:
             response = await websocket.recv()
@@ -178,7 +195,8 @@ class TestAuthMiddlewareRuntime:
     @pytest.mark.asyncio
     async def test_invalid_token_closes_connection(self, test_runtime_server):
         """Test that invalid token closes connection"""
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
         # Connect with invalid token
@@ -194,7 +212,8 @@ class TestAuthMiddlewareRuntime:
     @pytest.mark.asyncio
     async def test_no_token_closes_connection(self, test_runtime_server):
         """Test that missing token closes connection"""
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
         with pytest.raises(websockets.exceptions.ConnectionClosedError) as exc_info:
@@ -206,10 +225,18 @@ class TestAuthMiddlewareRuntime:
     @pytest.mark.asyncio
     async def test_authenticated_messaging(self, test_runtime_server):
         """Test that authenticated users can send messages"""
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
-        valid_uri = f"{uri}?token=testusersecret_key"
+        # Generate valid JWT token
+        jwt_token = generate_auth_token(
+            user_id="testuser",
+            secret_key=secret_key,
+            ttl_seconds=300
+        )
+        
+        valid_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(valid_uri) as websocket:
             # Skip connection message
@@ -327,14 +354,22 @@ class TestRateLimitingMiddlewareRuntime:
     @pytest.mark.asyncio
     async def test_rate_limit_with_user_identification(self, test_runtime_server):
         """Test rate limiting per user"""
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         rate_middleware = RateLimitingMiddleware(max_messages_per_minute=1)
         
         uri = test_runtime_server.start_server_with_middleware([auth_middleware, rate_middleware])
         
         # User 1
-        user1_uri = f"{uri}?token=user1secret_key"
-        async with websockets.connect(user1_uri) as ws1:
+        # Generate valid JWT token
+        jwt_token = generate_auth_token(
+            user_id="user1",
+            secret_key=secret_key,
+            ttl_seconds=300
+        )
+        
+        valid_uri = f"{uri}?token={jwt_token}"
+        async with websockets.connect(valid_uri) as ws1:
             await ws1.recv()  # Skip connection
             
             # User 1 sends message - should work
@@ -342,14 +377,22 @@ class TestRateLimitingMiddlewareRuntime:
             await ws1.recv()
             
             # User 2 (different user) should still be able to send
-            user2_uri = f"{uri}?token=user2secret_key"
-            async with websockets.connect(user2_uri) as ws2:
-                await ws2.recv()  # Skip connection
-                
-                # User 2 sends message - should work (different rate limit)
-                await ws2.send(json.dumps({"type": "test", "data": "user2_msg"}))
-                response = json.loads(await ws2.recv())
-                assert response["user_id"] == "user2"
+            # Generate valid JWT token
+        jwt_token = generate_auth_token(
+            user_id="user2",
+            secret_key=secret_key,
+            ttl_seconds=300
+        )
+        
+        user2_uri = f"{uri}?token={jwt_token}"
+        
+        async with websockets.connect(user2_uri) as ws2:
+            await ws2.recv()  # Skip connection
+            
+            # User 2 sends message - should work (different rate limit)
+            await ws2.send(json.dumps({"type": "test", "data": "user2_msg"}))
+            response = json.loads(await ws2.recv())
+            assert response["user_id"] == "user2"
 
 
 # =============================================================================
@@ -362,7 +405,8 @@ class TestMiddlewareChainRuntime:
     @pytest.mark.asyncio
     async def test_middleware_execution_order(self, test_runtime_server):
         """Test that middleware execute in correct order"""
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         logging_middleware = LoggingMiddleware("aiows.chain")
         rate_middleware = RateLimitingMiddleware(max_messages_per_minute=10)
         
@@ -370,7 +414,14 @@ class TestMiddlewareChainRuntime:
         middleware_chain = [auth_middleware, logging_middleware, rate_middleware]
         uri = test_runtime_server.start_server_with_middleware(middleware_chain)
         
-        valid_uri = f"{uri}?token=userXsecret_key"
+        # Generate valid JWT token
+        jwt_token = generate_auth_token(
+            user_id="userX",
+            secret_key=secret_key,
+            ttl_seconds=300
+        )
+        
+        valid_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(valid_uri) as websocket:
             # Should pass through all middleware
@@ -392,7 +443,8 @@ class TestMiddlewareChainRuntime:
     @pytest.mark.asyncio
     async def test_middleware_error_stops_chain(self, test_runtime_server):
         """Test that middleware error stops execution chain"""
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         rate_middleware = RateLimitingMiddleware(max_messages_per_minute=10)
         
         # Auth should fail and prevent rate middleware from running
@@ -410,13 +462,21 @@ class TestMiddlewareChainRuntime:
     @pytest.mark.asyncio 
     async def test_context_preservation_across_middleware(self, test_runtime_server):
         """Test that context is preserved across middleware chain"""
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         rate_middleware = RateLimitingMiddleware(max_messages_per_minute=5)
         
         middleware_chain = [auth_middleware, rate_middleware]
         uri = test_runtime_server.start_server_with_middleware(middleware_chain)
         
-        valid_uri = f"{uri}?token=contextusersecret_key"
+        # Generate valid JWT token
+        jwt_token = generate_auth_token(
+            user_id="contextuser",
+            secret_key=secret_key,
+            ttl_seconds=300
+        )
+        
+        valid_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(valid_uri) as websocket:
             await websocket.recv()  # Skip connection
@@ -440,7 +500,8 @@ class TestMiddlewarePerformance:
     @pytest.mark.asyncio
     async def test_rapid_connection_attempts(self, test_runtime_server):
         """Test rapid connection attempts with auth middleware"""
-        auth_middleware = AuthMiddleware("secret_key")
+        secret_key = "test_secret_key_32_characters_long_12345"
+        auth_middleware = AuthMiddleware(secret_key)
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
         # Rapid invalid connection attempts
