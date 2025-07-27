@@ -1,7 +1,3 @@
-"""
-Basic tests for aiows MVP functionality
-"""
-
 import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -22,17 +18,14 @@ from aiows.dispatcher import MessageDispatcher
 
 
 class TestBaseMessage:
-    """Test BaseMessage and its subclasses"""
     
     def test_base_message_creation(self):
-        """Test BaseMessage can be created with required fields"""
         message = BaseMessage(type="test")
         
         assert message.type == "test"
         assert isinstance(message.timestamp, datetime)
     
     def test_chat_message_creation(self):
-        """Test ChatMessage creation and validation"""
         message = ChatMessage(text="Hello", user_id=123)
         
         assert message.type == "chat"
@@ -41,7 +34,6 @@ class TestBaseMessage:
         assert isinstance(message.timestamp, datetime)
     
     def test_join_room_message_creation(self):
-        """Test JoinRoomMessage creation and validation"""
         message = JoinRoomMessage(room_id="room1", user_name="Alice")
         
         assert message.type == "join_room"
@@ -49,7 +41,6 @@ class TestBaseMessage:
         assert message.user_name == "Alice"
     
     def test_game_action_message_creation(self):
-        """Test GameActionMessage creation and validation"""
         message = GameActionMessage(action="move", coordinates=(10, 20))
         
         assert message.type == "game_action"
@@ -57,7 +48,6 @@ class TestBaseMessage:
         assert message.coordinates == (10, 20)
     
     def test_message_dict_serialization(self):
-        """Test message serialization to dictionary"""
         message = ChatMessage(text="Test", user_id=456)
         data = message.dict()
         
@@ -68,10 +58,8 @@ class TestBaseMessage:
 
 
 class TestRouter:
-    """Test Router functionality"""
     
     def test_router_creation(self):
-        """Test Router can be created"""
         router = Router()
         
         assert len(router._connect_handlers) == 0
@@ -80,7 +68,6 @@ class TestRouter:
         assert len(router._sub_routers) == 0
     
     def test_connect_decorator(self):
-        """Test connect decorator registers handler"""
         router = Router()
         
         @router.connect()
@@ -91,7 +78,6 @@ class TestRouter:
         assert router._connect_handlers[0] == test_handler
     
     def test_disconnect_decorator(self):
-        """Test disconnect decorator registers handler"""
         router = Router()
         
         @router.disconnect()
@@ -102,7 +88,6 @@ class TestRouter:
         assert router._disconnect_handlers[0] == test_handler
     
     def test_message_decorator(self):
-        """Test message decorator registers handler"""
         router = Router()
         
         @router.message("chat")
@@ -115,7 +100,6 @@ class TestRouter:
         assert handler_info["message_type"] == "chat"
     
     def test_message_decorator_without_type(self):
-        """Test message decorator without message type"""
         router = Router()
         
         @router.message()
@@ -126,7 +110,6 @@ class TestRouter:
         assert handler_info["message_type"] is None
     
     def test_include_router(self):
-        """Test including sub-router"""
         main_router = Router()
         sub_router = Router()
         
@@ -139,10 +122,8 @@ class TestRouter:
 
 
 class TestWebSocketServer:
-    """Test WebSocketServer functionality"""
     
     def test_server_creation(self):
-        """Test WebSocketServer can be created"""
         server = WebSocketServer()
         
         assert server.host == "localhost"
@@ -152,11 +133,9 @@ class TestWebSocketServer:
         assert len(server._connections) == 0
     
     def test_include_router(self):
-        """Test including router to server"""
         server = WebSocketServer()
         router = Router()
         
-        # Add a handler to router to verify it's included
         @router.connect()
         async def test_handler(websocket):
             pass
@@ -168,10 +147,8 @@ class TestWebSocketServer:
 
 
 class TestMessageDispatcher:
-    """Test MessageDispatcher functionality"""
     
     def test_dispatcher_creation(self):
-        """Test MessageDispatcher can be created"""
         router = Router()
         dispatcher = MessageDispatcher(router)
         
@@ -179,11 +156,9 @@ class TestMessageDispatcher:
     
     @pytest.mark.asyncio
     async def test_dispatch_connect(self):
-        """Test dispatching connect event"""
         router = Router()
         dispatcher = MessageDispatcher(router)
         
-        # Mock handler
         handler_called = False
         
         @router.connect()
@@ -191,7 +166,6 @@ class TestMessageDispatcher:
             nonlocal handler_called
             handler_called = True
         
-        # Mock websocket
         mock_websocket = MagicMock()
         
         await dispatcher.dispatch_connect(mock_websocket)
@@ -200,11 +174,9 @@ class TestMessageDispatcher:
     
     @pytest.mark.asyncio
     async def test_dispatch_disconnect(self):
-        """Test dispatching disconnect event"""
         router = Router()
         dispatcher = MessageDispatcher(router)
         
-        # Mock handler
         received_reason = None
         
         @router.disconnect()
@@ -212,7 +184,6 @@ class TestMessageDispatcher:
             nonlocal received_reason
             received_reason = reason
         
-        # Mock websocket
         mock_websocket = MagicMock()
         
         await dispatcher.dispatch_disconnect(mock_websocket, "test reason")
@@ -221,11 +192,9 @@ class TestMessageDispatcher:
     
     @pytest.mark.asyncio
     async def test_dispatch_message_valid(self):
-        """Test dispatching valid message"""
         router = Router()
         dispatcher = MessageDispatcher(router)
         
-        # Mock handler
         received_message = None
         
         @router.message("test")
@@ -233,10 +202,8 @@ class TestMessageDispatcher:
             nonlocal received_message
             received_message = message
         
-        # Mock websocket
         mock_websocket = MagicMock()
         
-        # Valid message data
         message_data = {"type": "test", "timestamp": datetime.now().isoformat()}
         
         await dispatcher.dispatch_message(mock_websocket, message_data)
@@ -246,14 +213,11 @@ class TestMessageDispatcher:
     
     @pytest.mark.asyncio
     async def test_dispatch_message_invalid(self):
-        """Test dispatching invalid message raises exception"""
         router = Router()
         dispatcher = MessageDispatcher(router)
         
-        # Mock websocket
         mock_websocket = MagicMock()
         
-        # Invalid message data (missing required field)
         message_data = {"invalid": "data"}
         
         with pytest.raises(MessageValidationError):

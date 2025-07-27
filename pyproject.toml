@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aiows"
-version = "0.0.4"
+version = "0.1.0"
 description = "Modern WebSocket framework inspired by aiogram"
 authors = [{name = "aiows contributors"}]
 license = {text = "MIT"}
@@ -20,12 +20,17 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Internet :: WWW/HTTP",
-    "Topic :: Software Development :: Libraries :: Python Modules"
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Networking",
+    "Framework :: AsyncIO"
 ]
 
 [project.urls]
 homepage = "https://github.com/mr-akkerman/aiows"
 
 [project.optional-dependencies]
-dev = ["pytest", "black", "isort", "mypy"] 
+dev = ["pytest", "black", "isort", "mypy"]
