@@ -25,6 +25,13 @@ class MessageValidationError(AiowsException):
         super().__init__(message)
 
 
+class MessageSizeError(AiowsException):
+    """Exception raised when message size exceeds limit"""
+    
+    def __init__(self, message: str = "Message size limit exceeded"):
+        super().__init__(message)
+
+
 class RouterError(AiowsException):
     """Exception raised for routing errors"""
     

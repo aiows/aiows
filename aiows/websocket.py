@@ -8,29 +8,38 @@ from typing import Dict, Any
 import json
 from datetime import datetime
 from .types import BaseMessage
-from .exceptions import ConnectionError
+from .exceptions import ConnectionError, MessageSizeError
 
 logger = logging.getLogger(__name__)
 
 # Default timeout for operations (in seconds)
 DEFAULT_OPERATION_TIMEOUT = 30.0
 
+# Default maximum message size (1MB)
+DEFAULT_MAX_MESSAGE_SIZE = 1024 * 1024
+
 
 class WebSocket:
     """WebSocket connection wrapper for aiows framework"""
     
-    def __init__(self, websocket, operation_timeout: float = DEFAULT_OPERATION_TIMEOUT):
+    def __init__(self, websocket, operation_timeout: float = DEFAULT_OPERATION_TIMEOUT, 
+                 max_message_size: int = DEFAULT_MAX_MESSAGE_SIZE):
         """Initialize WebSocket wrapper
         
         Args:
             websocket: Standard websocket object
             operation_timeout: Timeout for WebSocket operations in seconds
+            max_message_size: Maximum allowed message size in bytes (default: 1MB)
         """
         self._websocket = websocket
         self.context: Dict[str, Any] = {}
         self._is_closed: bool = False
         self._lock = asyncio.Lock()  # Thread safety lock
         self._operation_timeout = operation_timeout
+        self._max_message_size = max_message_size
+        
+        if max_message_size <= 0:
+            raise ValueError("max_message_size must be positive")
     
     async def send_json(self, data: dict) -> None:
         """Send JSON data through WebSocket
@@ -87,6 +96,7 @@ class WebSocket:
             
         Raises:
             ConnectionError: If connection is closed or receive fails
+            MessageSizeError: If message size exceeds limit
         """
         async with self._lock:
             if self._is_closed:
@@ -99,6 +109,12 @@ class WebSocket:
                     timeout=self._operation_timeout
                 )
                 
+                # Check message size before parsing JSON
+                message_size = len(raw_data)
+                if message_size > self._max_message_size:
+                    logger.warning(f"Oversized JSON message blocked: {message_size} bytes (limit: {self._max_message_size})")
+                    raise MessageSizeError(f"Message size {message_size} exceeds limit {self._max_message_size}")
+                
                 try:
                     return json.loads(raw_data)
                 except json.JSONDecodeError as e:
@@ -107,6 +123,9 @@ class WebSocket:
                 # Mark as closed on timeout
                 self._is_closed = True
                 raise ConnectionError(f"Receive operation timed out after {self._operation_timeout} seconds")
+            except MessageSizeError:
+                # Don't close connection for MessageSizeError
+                raise
             except Exception as e:
                 # Mark as closed on any error
                 self._is_closed = True
@@ -120,6 +139,7 @@ class WebSocket:
             
         Raises:
             ConnectionError: If connection is closed or receive fails
+            MessageSizeError: If message size exceeds limit
         """
         async with self._lock:
             if self._is_closed:
@@ -127,14 +147,26 @@ class WebSocket:
             
             try:
                 # Use timeout protection for receive operation
-                return await asyncio.wait_for(
+                raw_data = await asyncio.wait_for(
                     self._websocket.recv(),
                     timeout=self._operation_timeout
                 )
+                
+                # Check message size
+                message_size = len(raw_data)
+                if message_size > self._max_message_size:
+                    logger.warning(f"Oversized message blocked: {message_size} bytes (limit: {self._max_message_size})")
+                    raise MessageSizeError(f"Message size {message_size} exceeds limit {self._max_message_size}")
+                
+                return raw_data
+                
             except asyncio.TimeoutError:
                 # Mark as closed on timeout
                 self._is_closed = True
                 raise ConnectionError(f"Receive operation timed out after {self._operation_timeout} seconds")
+            except MessageSizeError:
+                # Don't close connection for MessageSizeError
+                raise
             except Exception as e:
                 # Mark as closed on any error
                 self._is_closed = True
