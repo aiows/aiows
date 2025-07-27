@@ -5,10 +5,11 @@ Modern WebSocket framework for Python inspired by aiogram. Build real-time appli
 ## Key Features
 
 - **Declarative routing** with decorators (@router.connect, @router.message)
-- **Middleware system** for authentication, logging, rate limiting
+- **Middleware system** for authentication, logging, rate limiting, connection flooding protection
 - **Typed messages** with Pydantic validation
 - **Context management** for connection-specific data
 - **Built-in authentication** with token support
+- **DDoS protection** with IP-based connection limiting and rate limiting
 - **Exception handling** with graceful error recovery
 - **Production ready** with comprehensive test coverage
 
@@ -100,15 +101,34 @@ server.add_middleware(rate_limit)
 # Automatically closes connections exceeding limit with code 4429
 ```
 
+### Connection Flooding Protection
+
+```python
+from aiows import ConnectionLimiterMiddleware
+
+# Protect against connection flooding attacks
+connection_limiter = ConnectionLimiterMiddleware(
+    max_connections_per_ip=10,          # Max concurrent connections per IP
+    max_connections_per_minute=30,      # Max new connections per minute
+    sliding_window_size=60,             # Sliding window in seconds
+    whitelist_ips=["192.168.1.100"],    # Trusted IPs bypass limits
+    cleanup_interval=300                # Memory cleanup interval
+)
+server.add_middleware(connection_limiter)
+
+# Monitors connection patterns and blocks suspicious IPs with code 4008
+```
+
 ### Middleware Order
 
 ```python
 server = WebSocketServer()
 
-# Middleware executes in order: auth -> logging -> rate limiting
-server.add_middleware(AuthMiddleware("secret"))
-server.add_middleware(LoggingMiddleware())
-server.add_middleware(RateLimitingMiddleware(60))
+# Middleware executes in order
+server.add_middleware(LoggingMiddleware())                    # Log all activity
+server.add_middleware(ConnectionLimiterMiddleware())          # Block flooding attacks
+server.add_middleware(AuthMiddleware("secret"))               # Authenticate users
+server.add_middleware(RateLimitingMiddleware(60))            # Rate limit messages
 
 # Router middleware executes after server middleware
 router.add_middleware(CustomMiddleware())
