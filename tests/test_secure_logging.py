@@ -21,16 +21,12 @@ from aiows.websocket import WebSocket
 
 
 class TestDataSanitizer:
-    """Test data sanitization functionality"""
-    
     def test_mask_value(self):
-        """Test value masking"""
         assert DataSanitizer.mask_value("abc") == "***"
         assert DataSanitizer.mask_value("password123") == "pa*******23"
         assert DataSanitizer.mask_value("secret_key_123", keep_chars=1) == "s************3"
     
     def test_hash_value(self):
-        """Test value hashing"""
         value = "test@example.com"
         hash1 = DataSanitizer.hash_value(value)
         hash2 = DataSanitizer.hash_value(value)
@@ -39,7 +35,6 @@ class TestDataSanitizer:
         assert hash1 != value
     
     def test_sanitize_string_patterns(self):
-        """Test string sanitization with various patterns"""
         text = 'user login with password="secretpass123"'
         sanitized = DataSanitizer.sanitize_string(text)
         assert "secretpass123" not in sanitized
@@ -59,7 +54,6 @@ class TestDataSanitizer:
         assert len(sanitized.split()[-1]) == 8
     
     def test_sanitize_dict_sensitive_keys(self):
-        """Test dictionary sanitization with sensitive keys"""
         data = {
             "username": "testuser",
             "password": "secret123",
@@ -80,7 +74,6 @@ class TestDataSanitizer:
         assert "se*****23" in sanitized["password"]
     
     def test_sanitize_nested_dict(self):
-        """Test nested dictionary sanitization"""
         data = {
             "user": {
                 "credentials": {
@@ -102,7 +95,6 @@ class TestDataSanitizer:
         assert credentials["token"] != "auth_token_123"
     
     def test_sanitize_max_depth(self):
-        """Test max depth protection"""
         data = {"level1": {"level2": {"level3": {"level4": {"level5": {"level6": "deep"}}}}}}
         
         sanitized = DataSanitizer.sanitize_dict(data, max_depth=3)
@@ -110,7 +102,6 @@ class TestDataSanitizer:
         assert "_truncated" in str(sanitized)
     
     def test_sanitize_list_values(self):
-        """Test list sanitization"""
         data = {
             "passwords": ["secret1", "secret2", "secret3"],
             "users": ["user1", "user2"]
@@ -123,17 +114,13 @@ class TestDataSanitizer:
 
 
 class TestLogRateLimiter:
-    """Test log rate limiting functionality"""
-    
     def test_rate_limiter_allows_under_limit(self):
-        """Test that requests under limit are allowed"""
         limiter = LogRateLimiter(max_logs_per_minute=5, max_logs_per_hour=10)
         
         for _ in range(5):
             assert limiter.is_allowed() == True
     
     def test_rate_limiter_blocks_over_minute_limit(self):
-        """Test that requests over minute limit are blocked"""
         limiter = LogRateLimiter(max_logs_per_minute=3, max_logs_per_hour=10)
         
         for _ in range(3):
@@ -142,7 +129,6 @@ class TestLogRateLimiter:
         assert limiter.is_allowed() == False
     
     def test_rate_limiter_blocks_over_hour_limit(self):
-        """Test that requests over hour limit are blocked"""
         limiter = LogRateLimiter(max_logs_per_minute=100, max_logs_per_hour=2)
         
         for _ in range(2):
@@ -152,7 +138,6 @@ class TestLogRateLimiter:
     
     @patch('aiows.middleware.logging.datetime')
     def test_rate_limiter_cleanup(self, mock_datetime):
-        """Test that old log entries are cleaned up"""
         start_time = datetime(2023, 1, 1, 12, 0, 0)
         mock_datetime.now.return_value = start_time
         
@@ -169,10 +154,7 @@ class TestLogRateLimiter:
 
 
 class TestSecureJSONFormatter:
-    """Test JSON formatter functionality"""
-    
     def test_json_formatter_basic(self):
-        """Test basic JSON formatting"""
         formatter = SecureJSONFormatter()
         
         record = logging.LogRecord(
@@ -189,7 +171,6 @@ class TestSecureJSONFormatter:
         assert "timestamp" in data
     
     def test_json_formatter_with_correlation_id(self):
-        """Test JSON formatting with correlation ID"""
         formatter = SecureJSONFormatter()
         
         record = logging.LogRecord(
@@ -204,7 +185,6 @@ class TestSecureJSONFormatter:
         assert data["correlation_id"] == "test-correlation-123"
     
     def test_json_formatter_with_structured_data(self):
-        """Test JSON formatting with structured data"""
         formatter = SecureJSONFormatter()
         
         record = logging.LogRecord(
@@ -226,11 +206,8 @@ class TestSecureJSONFormatter:
 
 
 class TestLoggingMiddleware:
-    """Test secure logging middleware functionality"""
-    
     @pytest.fixture
     def mock_websocket(self):
-        """Create a mock WebSocket for testing"""
         websocket = MagicMock(spec=WebSocket)
         websocket.context = {"user_id": "user123", "authenticated": True}
         websocket._websocket = MagicMock()
@@ -239,7 +216,6 @@ class TestLoggingMiddleware:
     
     @pytest.fixture
     def logging_middleware(self):
-        """Create logging middleware for testing"""
         return LoggingMiddleware(
             logger_name="test_logger",
             use_json_format=False,
@@ -248,7 +224,6 @@ class TestLoggingMiddleware:
         )
     
     def test_correlation_id_generation(self, logging_middleware, mock_websocket):
-        """Test correlation ID generation and persistence"""
         corr_id_1 = logging_middleware._get_correlation_id(mock_websocket)
         assert corr_id_1 is not None
         assert len(corr_id_1) > 0
@@ -262,7 +237,6 @@ class TestLoggingMiddleware:
         assert corr_id_3 != corr_id_1
     
     def test_client_info_sanitization(self, logging_middleware, mock_websocket):
-        """Test that client info is properly sanitized"""
         client_info = logging_middleware._get_client_info(mock_websocket)
         
         assert "client_ip_hash" in client_info
@@ -276,7 +250,6 @@ class TestLoggingMiddleware:
         assert "connection_id" in client_info
     
     def test_message_info_sanitization(self, logging_middleware):
-        """Test that message info is properly sanitized"""
         message_data = {
             "type": "auth",
             "password": "secret123",
@@ -293,7 +266,6 @@ class TestLoggingMiddleware:
         assert "message_content" not in message_info
     
     def test_message_content_when_enabled(self):
-        """Test message content inclusion when explicitly enabled"""
         middleware = LoggingMiddleware(
             use_json_format=False,
             include_message_content=True,
@@ -315,7 +287,6 @@ class TestLoggingMiddleware:
     
     @pytest.mark.asyncio
     async def test_on_connect_logging(self, logging_middleware, mock_websocket):
-        """Test connection event logging"""
         handler = AsyncMock(return_value="connection_result")
         
         with patch.object(logging_middleware, '_log_structured') as mock_log:
@@ -331,7 +302,6 @@ class TestLoggingMiddleware:
     
     @pytest.mark.asyncio
     async def test_on_connect_error_logging(self, logging_middleware, mock_websocket):
-        """Test connection error logging"""
         handler = AsyncMock(side_effect=ValueError("Connection failed"))
         
         with patch.object(logging_middleware, '_log_structured') as mock_log:
@@ -348,7 +318,6 @@ class TestLoggingMiddleware:
     
     @pytest.mark.asyncio
     async def test_on_message_logging(self, logging_middleware, mock_websocket):
-        """Test message event logging"""
         message_data = {"type": "chat", "content": "Hello world"}
         handler = AsyncMock(return_value="message_result")
         
@@ -366,7 +335,6 @@ class TestLoggingMiddleware:
     
     @pytest.mark.asyncio
     async def test_on_message_performance_warning(self, logging_middleware, mock_websocket):
-        """Test performance warning for slow message processing"""
         message_data = {"type": "slow"}
         
         async def slow_handler(*args, **kwargs):
@@ -383,7 +351,6 @@ class TestLoggingMiddleware:
     
     @pytest.mark.asyncio
     async def test_on_disconnect_logging(self, logging_middleware, mock_websocket):
-        """Test disconnect event logging"""
         reason = "Client closed connection"
         handler = AsyncMock(return_value="disconnect_result")
         
@@ -401,7 +368,6 @@ class TestLoggingMiddleware:
     
     @pytest.mark.asyncio
     async def test_correlation_id_cleanup_on_disconnect(self, logging_middleware, mock_websocket):
-        """Test that correlation ID is cleaned up on disconnect"""
         corr_id = logging_middleware._get_correlation_id(mock_websocket)
         assert corr_id in logging_middleware.connection_correlations.values()
         
@@ -411,7 +377,6 @@ class TestLoggingMiddleware:
         assert corr_id not in logging_middleware.connection_correlations.values()
     
     def test_rate_limiting_integration(self):
-        """Test rate limiting integration"""
         middleware = LoggingMiddleware(
             enable_rate_limiting=True,
             max_logs_per_minute=2,
@@ -424,7 +389,6 @@ class TestLoggingMiddleware:
         assert middleware._should_log() is False
     
     def test_backwards_compatibility(self):
-        """Test that basic LoggingMiddleware API is preserved"""
         middleware = LoggingMiddleware()
         assert middleware is not None
         
@@ -432,7 +396,6 @@ class TestLoggingMiddleware:
         assert middleware.logger.name == "custom_logger"
     
     def test_sensitive_data_not_in_logs(self, logging_middleware, mock_websocket):
-        """Integration test: ensure sensitive data never appears in logs"""
         sensitive_message = {
             "type": "login",
             "username": "testuser",
@@ -450,7 +413,6 @@ class TestLoggingMiddleware:
             assert "user@company.com" not in info_str
     
     def test_json_logging_format(self):
-        """Test JSON logging format"""
         middleware = LoggingMiddleware(
             use_json_format=True,
             enable_rate_limiting=False
@@ -462,10 +424,7 @@ class TestLoggingMiddleware:
 
 
 class TestSecurityCompliance:
-    """Test security compliance requirements"""
-    
     def test_no_plain_text_passwords_in_any_output(self):
-        """Comprehensive test that passwords never appear in plain text"""
         middleware = LoggingMiddleware(include_message_content=True, sanitize_data=True)
         
         test_cases = [
@@ -484,7 +443,6 @@ class TestSecurityCompliance:
                 assert value not in output, f"Password '{value}' found in output: {output}"
     
     def test_pii_data_protection(self):
-        """Test that PII data is protected"""
         test_data = {
             "email": "john.doe@company.com",
             "phone": "+1-555-123-4567",
@@ -501,7 +459,6 @@ class TestSecurityCompliance:
         assert "4532-1234-5678-9012" not in output
     
     def test_correlation_id_format_security(self):
-        """Test that correlation IDs are properly formatted and unique"""
         middleware = LoggingMiddleware()
         
         ids = [middleware._generate_correlation_id() for _ in range(100)]

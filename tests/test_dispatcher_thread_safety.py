@@ -195,8 +195,9 @@ class TestDispatcherThreadSafety:
         dispatcher._middleware.clear()
         
         dispatcher.add_middleware(ExceptionMiddleware("unexpected"))
-        with pytest.raises(ValueError, match="Unexpected error"):
-            await dispatcher.dispatch_message(websocket_wrapper, message_data)
+        await dispatcher.dispatch_message(websocket_wrapper, message_data)
+        
+        assert dispatcher.error_metrics.unexpected_errors > 0
     
     @pytest.mark.asyncio
     async def test_mixed_concurrent_operations(self, dispatcher, websocket_wrapper):

@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Literal, Tuple
 from pydantic import BaseModel, Field, field_validator
 
-# Import security validators
 from ..validators import (
     validate_safe_text, validate_username, validate_room_id, 
     validate_game_action, validate_user_id, validate_coordinates
@@ -29,7 +28,6 @@ class ChatMessage(BaseMessage):
     text: str
     user_id: int
     
-    # Validators for security
     @field_validator('text')
     @classmethod
     def validate_text_field(cls, v):
@@ -47,7 +45,6 @@ class JoinRoomMessage(BaseMessage):
     room_id: str
     user_name: str
     
-    # Validators for security
     @field_validator('room_id')
     @classmethod
     def validate_room_id_field(cls, v):
@@ -65,7 +62,6 @@ class GameActionMessage(BaseMessage):
     action: str
     coordinates: Tuple[int, int]
     
-    # Validators for security
     @field_validator('action')
     @classmethod
     def validate_action_field(cls, v):
@@ -74,4 +70,4 @@ class GameActionMessage(BaseMessage):
     @field_validator('coordinates')
     @classmethod
     def validate_coordinates_field(cls, v):
-        return validate_coordinates(cls, v) 
+        return validate_coordinates(cls, v)

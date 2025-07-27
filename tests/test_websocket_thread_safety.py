@@ -1,7 +1,3 @@
-"""
-Thread safety tests for WebSocket wrapper
-"""
-
 import asyncio
 import pytest
 import json
@@ -13,7 +9,6 @@ from aiows import WebSocket, ConnectionError
 
 
 class TestWebSocketThreadSafety:
-    """Test thread safety of WebSocket wrapper"""
     
     @pytest.fixture
     def mock_websocket(self):
@@ -29,8 +24,6 @@ class TestWebSocketThreadSafety:
     
     @pytest.mark.asyncio
     async def test_concurrent_close_calls_no_exceptions(self, websocket_wrapper):
-        """Test that concurrent close() calls don't cause exceptions"""
-        
         async def close_task():
             try:
                 await websocket_wrapper.close()
@@ -49,8 +42,6 @@ class TestWebSocketThreadSafety:
     
     @pytest.mark.asyncio
     async def test_concurrent_send_operations(self, websocket_wrapper, mock_websocket):
-        """Test concurrent send operations work correctly"""
-        
         async def send_task(data):
             try:
                 await websocket_wrapper.send_json({"id": data, "message": f"test_{data}"})
@@ -70,8 +61,6 @@ class TestWebSocketThreadSafety:
     
     @pytest.mark.asyncio
     async def test_concurrent_receive_operations(self, websocket_wrapper, mock_websocket):
-        """Test concurrent receive operations work correctly"""
-        
         receive_data = [f'{{"id": {i}, "data": "test_{i}"}}' for i in range(5)]
         mock_websocket.recv.side_effect = receive_data
         
@@ -92,8 +81,6 @@ class TestWebSocketThreadSafety:
     
     @pytest.mark.asyncio
     async def test_mixed_concurrent_operations(self, websocket_wrapper, mock_websocket):
-        """Test mixed send/receive/close operations concurrently"""
-        
         mock_websocket.send.return_value = None
         mock_websocket.recv.return_value = '{"test": "data"}'
         
@@ -134,8 +121,6 @@ class TestWebSocketThreadSafety:
     
     @pytest.mark.asyncio
     async def test_timeout_protection_send(self, websocket_wrapper, mock_websocket):
-        """Test timeout protection for send operations"""
-        
         async def hanging_send(*args, **kwargs):
             await asyncio.sleep(2.0)
         
@@ -148,8 +133,6 @@ class TestWebSocketThreadSafety:
     
     @pytest.mark.asyncio
     async def test_timeout_protection_receive(self, websocket_wrapper, mock_websocket):
-        """Test timeout protection for receive operations"""
-        
         async def hanging_recv(*args, **kwargs):
             await asyncio.sleep(2.0)
         
@@ -162,8 +145,6 @@ class TestWebSocketThreadSafety:
     
     @pytest.mark.asyncio
     async def test_timeout_protection_close(self, websocket_wrapper, mock_websocket):
-        """Test timeout protection for close operation"""
-        
         async def hanging_close(*args, **kwargs):
             await asyncio.sleep(2.0)
         
@@ -175,8 +156,6 @@ class TestWebSocketThreadSafety:
     
     @pytest.mark.asyncio
     async def test_state_consistency_after_errors(self, websocket_wrapper, mock_websocket):
-        """Test state consistency is maintained after errors"""
-        
         mock_websocket.send.side_effect = Exception("Network error")
         
         with pytest.raises(ConnectionError):
@@ -192,8 +171,6 @@ class TestWebSocketThreadSafety:
     
     @pytest.mark.asyncio
     async def test_operations_after_close(self, websocket_wrapper):
-        """Test operations fail properly after close()"""
-        
         await websocket_wrapper.close()
         assert websocket_wrapper.closed is True
         
@@ -211,8 +188,6 @@ class TestWebSocketThreadSafety:
     
     @pytest.mark.asyncio
     async def test_performance_no_significant_degradation(self, mock_websocket):
-        """Test that thread safety doesn't significantly impact performance"""
-        
         websocket_wrapper = WebSocket(mock_websocket, operation_timeout=5.0)
         
         mock_websocket.send.return_value = None
@@ -247,8 +222,6 @@ class TestWebSocketThreadSafety:
     
     @pytest.mark.asyncio
     async def test_custom_timeout_setting(self, mock_websocket):
-        """Test custom timeout setting"""
-        
         websocket_wrapper = WebSocket(mock_websocket, operation_timeout=0.5)
         
         assert websocket_wrapper._operation_timeout == 0.5
@@ -264,8 +237,6 @@ class TestWebSocketThreadSafety:
     
     @pytest.mark.asyncio
     async def test_backward_compatibility_is_closed_property(self, websocket_wrapper):
-        """Test backward compatibility of is_closed property"""
-        
         assert websocket_wrapper.is_closed is False
         assert websocket_wrapper.closed is False
         
@@ -275,8 +246,6 @@ class TestWebSocketThreadSafety:
     
     @pytest.mark.asyncio
     async def test_json_serialization_with_datetime(self, websocket_wrapper, mock_websocket):
-        """Test JSON serialization with datetime objects works thread-safely"""
-        
         mock_websocket.send.return_value = None
         
         async def send_with_datetime(task_id):
