@@ -603,8 +603,8 @@ class WebSocketServer:
         self._shutdown_event.clear()
         
         try:
-            # Start the server
-            self._server_task = asyncio.create_task(self._run_server(host, port))
+            # Start the server with shutdown support
+            self._server_task = asyncio.create_task(self._run_server(host, port, wait_for_shutdown=True))
             
             # Wait for either server completion or shutdown signal
             done, pending = await asyncio.wait(
@@ -633,8 +633,14 @@ class WebSocketServer:
             if not self._shutdown_event.is_set():
                 await self._cleanup_resources()
 
-    async def _run_server(self, host: str, port: int) -> None:
-        """Internal method to run the WebSocket server"""
+    async def _run_server(self, host: str, port: int, wait_for_shutdown: bool = True) -> None:
+        """Internal method to run the WebSocket server
+        
+        Args:
+            host: Server host
+            port: Server port  
+            wait_for_shutdown: If True, wait for shutdown event. If False, run forever (for tests)
+        """
         # Create wrapper function that properly handles the websockets.serve callback
         async def connection_handler(websocket):
             await self._handle_connection(websocket)
@@ -649,8 +655,12 @@ class WebSocketServer:
             serve_kwargs['ssl'] = self.ssl_context
         
         async with websockets.serve(connection_handler, **serve_kwargs):
-            # Wait for shutdown event instead of running forever
-            await self._shutdown_event.wait()
+            if wait_for_shutdown:
+                # Wait for shutdown event (graceful shutdown mode)
+                await self._shutdown_event.wait()
+            else:
+                # Run forever (compatibility mode for tests)
+                await asyncio.Future()
     
     async def serve(self, host: str = "localhost", port: int = 8000) -> None:
         """Async version of run() for use in existing async contexts

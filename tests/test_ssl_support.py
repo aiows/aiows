@@ -399,15 +399,24 @@ class TestSSLIntegration:
             mock_serve.return_value.__aenter__ = AsyncMock()
             mock_serve.return_value.__aexit__ = AsyncMock()
             
-            with patch('asyncio.Future') as mock_future:
-                mock_future.return_value = asyncio.Future()
-                mock_future.return_value.set_result(None)
-                
-                with caplog.at_level(logging.INFO):
-                    await server.serve("localhost", 8443)
-                
-                # Verify SSL-specific logging
-                assert any("secure WebSocket server" in record.message for record in caplog.records)
+            async def mock_server_task():
+                # Wait a bit to let logging happen, then trigger shutdown
+                await asyncio.sleep(0.01)
+                await server.shutdown()
+            
+            with caplog.at_level(logging.INFO):
+                # Start shutdown task and run server with timeout
+                shutdown_task = asyncio.create_task(mock_server_task())
+                try:
+                    await asyncio.wait_for(server.serve("localhost", 8443), timeout=1.0)
+                except asyncio.TimeoutError:
+                    await server.shutdown()  # Ensure clean shutdown
+                finally:
+                    if not shutdown_task.done():
+                        shutdown_task.cancel()
+            
+            # Verify SSL-specific logging
+            assert any("secure WebSocket server" in record.message for record in caplog.records)
     
     def test_backward_compatibility_preserved(self):
         """Test that backward compatibility is preserved"""
