@@ -145,7 +145,7 @@ class TestAuthMiddlewareRuntime:
     async def test_valid_token_authentication(self, test_runtime_server):
         """Test authentication with valid token"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
         # Generate valid JWT token
@@ -171,7 +171,7 @@ class TestAuthMiddlewareRuntime:
     async def test_valid_token_in_headers(self, test_runtime_server):
         """Test authentication with token in Authorization header"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
         # Generate valid JWT token
@@ -196,7 +196,7 @@ class TestAuthMiddlewareRuntime:
     async def test_invalid_token_closes_connection(self, test_runtime_server):
         """Test that invalid token closes connection"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=1)  # 1 second timeout for invalid auth
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
         # Connect with invalid token
@@ -213,7 +213,7 @@ class TestAuthMiddlewareRuntime:
     async def test_no_token_closes_connection(self, test_runtime_server):
         """Test that missing token closes connection"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=1)  # 1 second timeout for tests
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
         with pytest.raises(websockets.exceptions.ConnectionClosedError) as exc_info:
@@ -226,7 +226,7 @@ class TestAuthMiddlewareRuntime:
     async def test_authenticated_messaging(self, test_runtime_server):
         """Test that authenticated users can send messages"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
         # Generate valid JWT token
@@ -355,7 +355,7 @@ class TestRateLimitingMiddlewareRuntime:
     async def test_rate_limit_with_user_identification(self, test_runtime_server):
         """Test rate limiting per user"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
         rate_middleware = RateLimitingMiddleware(max_messages_per_minute=1)
         
         uri = test_runtime_server.start_server_with_middleware([auth_middleware, rate_middleware])
@@ -406,7 +406,7 @@ class TestMiddlewareChainRuntime:
     async def test_middleware_execution_order(self, test_runtime_server):
         """Test that middleware execute in correct order"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
         logging_middleware = LoggingMiddleware("aiows.chain")
         rate_middleware = RateLimitingMiddleware(max_messages_per_minute=10)
         
@@ -444,7 +444,7 @@ class TestMiddlewareChainRuntime:
     async def test_middleware_error_stops_chain(self, test_runtime_server):
         """Test that middleware error stops execution chain"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=1)  # 1 second timeout for failed auth
         rate_middleware = RateLimitingMiddleware(max_messages_per_minute=10)
         
         # Auth should fail and prevent rate middleware from running
@@ -463,7 +463,7 @@ class TestMiddlewareChainRuntime:
     async def test_context_preservation_across_middleware(self, test_runtime_server):
         """Test that context is preserved across middleware chain"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
         rate_middleware = RateLimitingMiddleware(max_messages_per_minute=5)
         
         middleware_chain = [auth_middleware, rate_middleware]
@@ -501,7 +501,7 @@ class TestMiddlewarePerformance:
     async def test_rapid_connection_attempts(self, test_runtime_server):
         """Test rapid connection attempts with auth middleware"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key)
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=1)  # 1 second timeout for rapid tests
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
         # Rapid invalid connection attempts
