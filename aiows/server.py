@@ -6,9 +6,11 @@ import asyncio
 import atexit
 import logging
 import os
+import signal
 import ssl
 import subprocess
 import tempfile
+import time
 import warnings
 import websockets
 from typing import Dict, List, Optional, Union
@@ -156,6 +158,12 @@ class WebSocketServer:
         self.cert_config = cert_config or {}
         self._ssl_cert_files: Optional[tuple[str, str]] = None
         
+        # Graceful shutdown configuration
+        self._shutdown_event: asyncio.Event = asyncio.Event()
+        self._server_task: Optional[asyncio.Task] = None
+        self._shutdown_timeout: float = 30.0  # seconds
+        self._signal_handlers_registered: bool = False
+        
         # Validate SSL requirements
         self._validate_ssl_configuration()
     
@@ -285,6 +293,177 @@ class WebSocketServer:
             logger.error(f"Failed to reload SSL certificate: {e}")
             return False
     
+    def _setup_signal_handlers(self) -> None:
+        """Setup signal handlers for graceful shutdown"""
+        if self._signal_handlers_registered:
+            return
+        
+        try:
+            # Register signal handlers
+            loop = asyncio.get_running_loop()
+            
+            # SIGTERM handler
+            def sigterm_handler():
+                logger.info("Received SIGTERM, initiating graceful shutdown...")
+                asyncio.create_task(self.shutdown())
+            
+            # SIGINT handler (Ctrl+C)
+            def sigint_handler():
+                logger.info("Received SIGINT (Ctrl+C), initiating graceful shutdown...")
+                asyncio.create_task(self.shutdown())
+            
+            # Add signal handlers
+            loop.add_signal_handler(signal.SIGTERM, sigterm_handler)
+            loop.add_signal_handler(signal.SIGINT, sigint_handler)
+            
+            self._signal_handlers_registered = True
+            logger.debug("Signal handlers registered for graceful shutdown")
+            
+        except Exception as e:
+            logger.warning(f"Could not register signal handlers: {e}")
+    
+    async def shutdown(self, timeout: Optional[float] = None) -> None:
+        """Initiate graceful shutdown of the server
+        
+        Args:
+            timeout: Maximum time to wait for shutdown (uses default if None)
+        """
+        if self._shutdown_event.is_set():
+            logger.debug("Shutdown already in progress")
+            return
+        
+        shutdown_timeout = timeout or self._shutdown_timeout
+        logger.info(f"Starting graceful shutdown (timeout: {shutdown_timeout}s)")
+        
+        # Signal shutdown to all tasks
+        self._shutdown_event.set()
+        
+        # Close all active connections gracefully
+        await self._close_all_connections(shutdown_timeout / 2)
+        
+        # Cancel server task if running
+        if self._server_task and not self._server_task.done():
+            self._server_task.cancel()
+            try:
+                await asyncio.wait_for(self._server_task, timeout=shutdown_timeout / 4)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                logger.debug("Server task cancelled or timed out")
+        
+        # Cleanup resources
+        await self._cleanup_resources()
+        
+        logger.info("Graceful shutdown completed")
+    
+    async def _close_all_connections(self, timeout: float) -> None:
+        """Close all active WebSocket connections gracefully
+        
+        Args:
+            timeout: Maximum time to wait for connections to close
+        """
+        if not self._connections:
+            return
+        
+        logger.info(f"Closing {len(self._connections)} active connections...")
+        start_time = time.time()
+        
+        # Send close frames to all connections
+        close_tasks = []
+        for ws in list(self._connections):
+            try:
+                if not ws.closed:
+                    task = asyncio.create_task(self._close_connection_gracefully(ws))
+                    close_tasks.append(task)
+            except Exception as e:
+                logger.debug(f"Error initiating close for connection: {e}")
+        
+        # Wait for connections to close with timeout
+        if close_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*close_tasks, return_exceptions=True),
+                    timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                elapsed = time.time() - start_time
+                logger.warning(f"Connection close timeout after {elapsed:.1f}s, forcing closure")
+                
+                # Force close remaining connections without waiting
+                for ws in list(self._connections):
+                    try:
+                        if not ws.closed:
+                            # Create task for force close but don't wait for it
+                            asyncio.create_task(ws.close(code=1001, reason="Server shutdown"))
+                        # Remove from connections immediately
+                        self._connections.discard(ws)
+                    except Exception as e:
+                        logger.debug(f"Error force-closing connection: {e}")
+                        self._connections.discard(ws)
+        
+        # Wait a bit more for connections to be removed from set
+        for _ in range(10):  # Max 1 second
+            if not self._connections:
+                break
+            await asyncio.sleep(0.1)
+        
+        remaining = len(self._connections)
+        if remaining > 0:
+            logger.warning(f"{remaining} connections did not close gracefully")
+        else:
+            logger.info("All connections closed successfully")
+    
+    async def _close_connection_gracefully(self, ws: WebSocket) -> None:
+        """Close a single WebSocket connection gracefully
+        
+        Args:
+            ws: WebSocket connection to close
+        """
+        try:
+            # Dispatch disconnect event first
+            await self.dispatcher.dispatch_disconnect(ws, "Server shutdown")
+        except Exception as e:
+            logger.debug(f"Error in disconnect handler: {e}")
+        
+        try:
+            # Close the connection
+            if not ws.closed:
+                await ws.close(code=1001, reason="Server shutdown")
+        except Exception as e:
+            logger.debug(f"Error closing connection: {e}")
+        
+        # Remove from connections set
+        self._connections.discard(ws)
+    
+    async def _cleanup_resources(self) -> None:
+        """Cleanup server resources"""
+        try:
+            # Clear connections set
+            self._connections.clear()
+            
+            # Clean up temporary SSL files if they exist
+            if hasattr(CertificateManager, 'cleanup_temp_files'):
+                CertificateManager.cleanup_temp_files()
+            
+            logger.debug("Resource cleanup completed")
+            
+        except Exception as e:
+            logger.warning(f"Error during resource cleanup: {e}")
+    
+    def set_shutdown_timeout(self, timeout: float) -> None:
+        """Set the timeout for graceful shutdown
+        
+        Args:
+            timeout: Timeout in seconds
+        """
+        if timeout <= 0:
+            raise ValueError("Shutdown timeout must be positive")
+        self._shutdown_timeout = timeout
+        logger.debug(f"Shutdown timeout set to {timeout}s")
+    
+    @property
+    def is_shutting_down(self) -> bool:
+        """Check if server is in shutdown process"""
+        return self._shutdown_event.is_set()
+    
     def add_middleware(self, middleware: BaseMiddleware) -> None:
         """Add global middleware to the server
         
@@ -335,34 +514,53 @@ class WebSocketServer:
             # Call dispatch_connect
             await self.dispatcher.dispatch_connect(ws_wrapper)
             
-            # Message processing loop
-            while not ws_wrapper.closed:
+            # Message processing loop with shutdown check
+            while not ws_wrapper.closed and not self._shutdown_event.is_set():
                 try:
-                    # Receive message and dispatch
-                    message_data = await ws_wrapper.receive_json()
-                    await self.dispatcher.dispatch_message(ws_wrapper, message_data)
+                    # Check for shutdown during receive with timeout
+                    try:
+                        message_data = await asyncio.wait_for(
+                            ws_wrapper.receive_json(),
+                            timeout=1.0  # Check shutdown every second
+                        )
+                        await self.dispatcher.dispatch_message(ws_wrapper, message_data)
+                    except asyncio.TimeoutError:
+                        # Timeout is normal, just continue to check shutdown
+                        continue
+                        
                 except Exception as e:
+                    # Check if this is a shutdown-related close
+                    if self._shutdown_event.is_set():
+                        logger.debug("Connection closed during shutdown")
+                        break
+                    
                     # Don't log normal connection closures (code 1000)
-                    if "1000 (OK)" not in str(e):
-                        print(f"Error processing message: {str(e)}")
+                    if "1000 (OK)" not in str(e) and "1001" not in str(e):
+                        logger.debug(f"Error processing message: {str(e)}")
                     break
                     
         except Exception as e:
-            print(f"Connection error: {str(e)}")
+            if not self._shutdown_event.is_set():
+                logger.debug(f"Connection error: {str(e)}")
         finally:
-            # Handle disconnection
-            reason = "Connection closed"
-            try:
-                await self.dispatcher.dispatch_disconnect(ws_wrapper, reason)
-            except Exception as e:
-                print(f"Error in disconnect handler: {str(e)}")
-            
-            # Remove from connections
-            self._connections.discard(ws_wrapper)
-            
-            # Ensure connection is closed
-            if not ws_wrapper.closed:
-                await ws_wrapper.close()
+            # Handle disconnection (only if not already handled by graceful close)
+            if ws_wrapper in self._connections:
+                reason = "Server shutdown" if self._shutdown_event.is_set() else "Connection closed"
+                try:
+                    await self.dispatcher.dispatch_disconnect(ws_wrapper, reason)
+                except Exception as e:
+                    logger.debug(f"Error in disconnect handler: {str(e)}")
+                
+                # Remove from connections
+                self._connections.discard(ws_wrapper)
+                
+                # Ensure connection is closed
+                if not ws_wrapper.closed:
+                    try:
+                        close_code = 1001 if self._shutdown_event.is_set() else 1000
+                        await ws_wrapper.close(code=close_code)
+                    except Exception as e:
+                        logger.debug(f"Error closing connection: {str(e)}")
     
     def run(self, host: str = "localhost", port: int = 8000) -> None:
         """Start WebSocket server
@@ -389,13 +587,52 @@ class WebSocketServer:
                 logger.error("CRITICAL: Running without SSL in production environment!")
         
         try:
-            asyncio.run(self._run_server(host, port))
+            asyncio.run(self._run_server_with_shutdown(host, port))
         except KeyboardInterrupt:
-            logger.info("Server shutdown requested")
+            logger.info("Server shutdown requested via KeyboardInterrupt")
         except Exception as e:
             logger.error(f"Server error: {e}")
             raise
     
+    async def _run_server_with_shutdown(self, host: str, port: int) -> None:
+        """Run WebSocket server with graceful shutdown support"""
+        # Setup signal handlers
+        self._setup_signal_handlers()
+        
+        # Reset shutdown event for new run
+        self._shutdown_event.clear()
+        
+        try:
+            # Start the server
+            self._server_task = asyncio.create_task(self._run_server(host, port))
+            
+            # Wait for either server completion or shutdown signal
+            done, pending = await asyncio.wait(
+                [self._server_task, asyncio.create_task(self._shutdown_event.wait())],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            
+            # If shutdown was triggered, initiate graceful shutdown
+            if self._shutdown_event.is_set():
+                logger.info("Shutdown event triggered, starting graceful shutdown...")
+                await self.shutdown()
+            
+            # Cancel any remaining tasks
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                    
+        except Exception as e:
+            logger.error(f"Server error during shutdown-aware run: {e}")
+            raise
+        finally:
+            # Ensure cleanup even if something goes wrong
+            if not self._shutdown_event.is_set():
+                await self._cleanup_resources()
+
     async def _run_server(self, host: str, port: int) -> None:
         """Internal method to run the WebSocket server"""
         # Create wrapper function that properly handles the websockets.serve callback
@@ -412,7 +649,8 @@ class WebSocketServer:
             serve_kwargs['ssl'] = self.ssl_context
         
         async with websockets.serve(connection_handler, **serve_kwargs):
-            await asyncio.Future()  # run forever
+            # Wait for shutdown event instead of running forever
+            await self._shutdown_event.wait()
     
     async def serve(self, host: str = "localhost", port: int = 8000) -> None:
         """Async version of run() for use in existing async contexts
@@ -438,4 +676,4 @@ class WebSocketServer:
             if self.is_production:
                 logger.error("CRITICAL: Running without SSL in production environment!")
         
-        await self._run_server(host, port) 
+        await self._run_server_with_shutdown(host, port) 
