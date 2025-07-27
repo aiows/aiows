@@ -11,32 +11,30 @@ import logging
 import secrets
 import time
 from collections import defaultdict, deque, OrderedDict
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple, Union, TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 from .base import BaseMiddleware
 from ..websocket import WebSocket
+
+if TYPE_CHECKING:
+    from ..settings import AuthConfig
 
 logger = logging.getLogger(__name__)
 
 
 class SecurityError(Exception):
-    """Security-related error in authentication"""
     pass
 
 
 class AuthenticationError(Exception):
-    """Authentication failed error"""
     pass
 
 
 class RateLimitError(Exception):
-    """Rate limit exceeded error"""
     pass
 
 
 class TicketManager:
-    """Manages one-time use tickets for authentication with memory limits"""
-    
     def __init__(self, cleanup_interval: int = 300, max_tickets: int = 50000):
         self._used_tickets: OrderedDict[str, float] = OrderedDict()
         self._cleanup_interval = cleanup_interval
@@ -76,8 +74,6 @@ class TicketManager:
 
 
 class RateLimiter:
-    """Rate limiter for authentication attempts"""
-    
     def __init__(self, max_attempts: int = 5, window_seconds: int = 300):
         self.max_attempts = max_attempts
         self.window_seconds = window_seconds
@@ -102,8 +98,6 @@ class RateLimiter:
 
 
 class SecureToken:
-    """Secure JWT-like token with HMAC-SHA256 signature"""
-    
     @staticmethod
     def encode_payload(payload: dict) -> str:
         json_payload = json.dumps(payload, separators=(',', ':')).encode('utf-8')
@@ -190,14 +184,32 @@ class AuthMiddleware(BaseMiddleware):
     """
     
     def __init__(self, 
-                 secret_key: str,
-                 token_ttl: int = 300,
-                 enable_ip_validation: bool = True,
-                 rate_limit_attempts: int = 5,
-                 rate_limit_window: int = 300,
-                 auth_timeout: int = 30,
-                 max_tickets: int = 50000,
-                 allowed_origins: Optional[List[str]] = None):
+                 secret_key: Optional[str] = None,
+                 token_ttl: Optional[int] = None,
+                 enable_ip_validation: Optional[bool] = None,
+                 rate_limit_attempts: Optional[int] = None,
+                 rate_limit_window: Optional[int] = None,
+                 auth_timeout: Optional[int] = None,
+                 max_tickets: Optional[int] = None,
+                 allowed_origins: Optional[List[str]] = None,
+                 config: Optional['AuthConfig'] = None):
+        
+        if config is not None:
+            secret_key = secret_key or config.secret_key
+            token_ttl = token_ttl or config.token_ttl
+            enable_ip_validation = enable_ip_validation if enable_ip_validation is not None else config.enable_ip_validation
+            rate_limit_attempts = rate_limit_attempts or config.rate_limit_attempts
+            rate_limit_window = rate_limit_window or config.rate_limit_window
+            auth_timeout = auth_timeout or config.auth_timeout
+            max_tickets = max_tickets or config.max_tickets
+            allowed_origins = allowed_origins or config.allowed_origins
+        else:
+            token_ttl = token_ttl or 300
+            enable_ip_validation = enable_ip_validation if enable_ip_validation is not None else True
+            rate_limit_attempts = rate_limit_attempts or 5
+            rate_limit_window = rate_limit_window or 300
+            auth_timeout = auth_timeout or 30
+            max_tickets = max_tickets or 50000
         
         if not secret_key or len(secret_key) < 32:
             raise ValueError("Secret key must be at least 32 characters long")
@@ -218,6 +230,10 @@ class AuthMiddleware(BaseMiddleware):
         ]
         
         logger.info("Secure AuthMiddleware initialized")
+    
+    @classmethod
+    def from_config(cls, config: 'AuthConfig') -> 'AuthMiddleware':
+        return cls(config=config)
     
     def _get_client_ip(self, websocket: WebSocket) -> Optional[str]:
         for extractor in self.ip_extractors:

@@ -3,9 +3,12 @@ Connection limiting middleware for aiows framework
 """
 
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, TYPE_CHECKING
 from .base import BaseMiddleware
 from ..websocket import WebSocket
+
+if TYPE_CHECKING:
+    from ..settings import ConnectionLimiterConfig
 
 
 class ConnectionLimiterMiddleware(BaseMiddleware):
@@ -21,21 +24,43 @@ class ConnectionLimiterMiddleware(BaseMiddleware):
     
     def __init__(
         self,
-        max_connections_per_ip: int = 10,
-        max_connections_per_minute: int = 30,
-        sliding_window_size: int = 60,
+        max_connections_per_ip: Optional[int] = None,
+        max_connections_per_minute: Optional[int] = None,
+        sliding_window_size: Optional[int] = None,
         whitelist_ips: Optional[List[str]] = None,
-        cleanup_interval: int = 300
+        cleanup_interval: Optional[int] = None,
+        config: Optional['ConnectionLimiterConfig'] = None
     ):
-        self.max_connections_per_ip = max_connections_per_ip
-        self.max_connections_per_minute = max_connections_per_minute
-        self.sliding_window_size = sliding_window_size
-        self.whitelist_ips: Set[str] = set(whitelist_ips or [])
-        self.cleanup_interval = cleanup_interval
+        # Load configuration
+        if config is not None:
+            self.max_connections_per_ip = config.max_connections_per_ip
+            self.max_connections_per_minute = config.max_connections_per_minute
+            self.sliding_window_size = config.sliding_window_size
+            self.whitelist_ips: Set[str] = set(config.whitelist_ips or [])
+            self.cleanup_interval = config.cleanup_interval
+        else:
+            # Use provided parameters or defaults for backward compatibility
+            self.max_connections_per_ip = max_connections_per_ip or 10
+            self.max_connections_per_minute = max_connections_per_minute or 30
+            self.sliding_window_size = sliding_window_size or 60
+            self.whitelist_ips: Set[str] = set(whitelist_ips or [])
+            self.cleanup_interval = cleanup_interval or 300
         
         self.active_connections: Dict[str, Set[int]] = {}
         self.connection_attempts: Dict[str, List[float]] = {}
         self.last_cleanup = time.time()
+    
+    @classmethod
+    def from_config(cls, config: 'ConnectionLimiterConfig') -> 'ConnectionLimiterMiddleware':
+        """Create ConnectionLimiterMiddleware instance from ConnectionLimiterConfig
+        
+        Args:
+            config: ConnectionLimiterConfig instance with configuration
+            
+        Returns:
+            Configured ConnectionLimiterMiddleware instance
+        """
+        return cls(config=config)
     
     def _get_client_ip(self, websocket: WebSocket) -> Optional[str]:
         try:

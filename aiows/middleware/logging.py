@@ -9,10 +9,13 @@ import uuid
 import re
 import hashlib
 from collections import defaultdict, deque
-from typing import Any, Awaitable, Callable, Optional, Dict, Set, Union
+from typing import Any, Awaitable, Callable, Optional, Dict, Set, Union, TYPE_CHECKING
 from datetime import datetime, timedelta, timezone
 from .base import BaseMiddleware
 from ..websocket import WebSocket
+
+if TYPE_CHECKING:
+    from ..settings import LoggingConfig
 
 
 class SecureJSONFormatter(logging.Formatter):
@@ -214,16 +217,40 @@ class LoggingMiddleware(BaseMiddleware):
     
     def __init__(
         self,
-        logger_name: str = "aiows",
-        use_json_format: bool = False,
-        log_level: Union[str, int] = logging.INFO,
-        enable_rate_limiting: bool = True,
-        max_logs_per_minute: int = 60,
-        max_logs_per_hour: int = 1000,
-        sanitize_data: bool = True,
-        include_message_content: bool = False,
-        performance_threshold_ms: float = 100.0
+        logger_name: Optional[str] = None,
+        use_json_format: Optional[bool] = None,
+        log_level: Optional[Union[str, int]] = None,
+        enable_rate_limiting: Optional[bool] = None,
+        max_logs_per_minute: Optional[int] = None,
+        max_logs_per_hour: Optional[int] = None,
+        sanitize_data: Optional[bool] = None,
+        include_message_content: Optional[bool] = None,
+        performance_threshold_ms: Optional[float] = None,
+        config: Optional['LoggingConfig'] = None
     ):
+        # Load configuration
+        if config is not None:
+            logger_name = logger_name or config.logger_name
+            use_json_format = use_json_format if use_json_format is not None else config.use_json_format
+            log_level = log_level or config.log_level
+            enable_rate_limiting = enable_rate_limiting if enable_rate_limiting is not None else config.enable_rate_limiting
+            max_logs_per_minute = max_logs_per_minute or config.max_logs_per_minute
+            max_logs_per_hour = max_logs_per_hour or config.max_logs_per_hour
+            sanitize_data = sanitize_data if sanitize_data is not None else config.sanitize_data
+            include_message_content = include_message_content if include_message_content is not None else config.include_message_content
+            performance_threshold_ms = performance_threshold_ms or config.performance_threshold_ms
+        else:
+            # Use defaults for backward compatibility
+            logger_name = logger_name or "aiows"
+            use_json_format = use_json_format if use_json_format is not None else False
+            log_level = log_level or logging.INFO
+            enable_rate_limiting = enable_rate_limiting if enable_rate_limiting is not None else True
+            max_logs_per_minute = max_logs_per_minute or 60
+            max_logs_per_hour = max_logs_per_hour or 1000
+            sanitize_data = sanitize_data if sanitize_data is not None else True
+            include_message_content = include_message_content if include_message_content is not None else False
+            performance_threshold_ms = performance_threshold_ms or 100.0
+        
         self.logger = logging.getLogger(logger_name)
         self.sanitize_data = sanitize_data
         self.include_message_content = include_message_content
@@ -250,6 +277,18 @@ class LoggingMiddleware(BaseMiddleware):
         self.rate_limiter = LogRateLimiter(max_logs_per_minute, max_logs_per_hour) if enable_rate_limiting else None
         
         self.connection_correlations: Dict[str, str] = {}
+    
+    @classmethod
+    def from_config(cls, config: 'LoggingConfig') -> 'LoggingMiddleware':
+        """Create LoggingMiddleware instance from LoggingConfig
+        
+        Args:
+            config: LoggingConfig instance with configuration
+            
+        Returns:
+            Configured LoggingMiddleware instance
+        """
+        return cls(config=config)
     
     def _should_log(self) -> bool:
         if self.rate_limiter is None:

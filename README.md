@@ -141,6 +141,232 @@ router.add_middleware(CustomMiddleware())
 server.include_router(router)
 ```
 
+## Configuration System
+
+aiows provides a centralized configuration system with environment variable support, validation, and different profiles for development, production, and testing environments.
+
+### Basic Configuration
+
+```python
+from aiows.settings import AiowsSettings, create_settings
+
+# Create settings with default development profile
+settings = AiowsSettings()
+
+# Or specify profile explicitly
+settings = AiowsSettings(profile="production")
+
+# Or use environment variable AIOWS_PROFILE
+settings = create_settings()  # Reads AIOWS_PROFILE env var
+
+# Access configuration values
+print(f"Server will run on {settings.server.host}:{settings.server.port}")
+print(f"Production mode: {settings.server.is_production}")
+print(f"Rate limit: {settings.rate_limit.max_messages_per_minute} msg/min")
+```
+
+### Environment Variables
+
+All configuration values can be overridden using environment variables:
+
+```bash
+# Server configuration
+export AIOWS_HOST=0.0.0.0
+export AIOWS_PORT=9000
+export AIOWS_IS_PRODUCTION=true
+
+# SSL configuration
+export AIOWS_SSL_CERT_FILE=/path/to/cert.pem
+export AIOWS_SSL_KEY_FILE=/path/to/key.pem
+
+# Authentication
+export AIOWS_SECRET_KEY=your-256-bit-secret-key-here
+export AIOWS_TOKEN_TTL=1800
+
+# Rate limiting
+export AIOWS_MAX_MESSAGES_PER_MINUTE=30
+export AIOWS_MAX_CONNECTIONS_PER_IP=5
+
+# Logging
+export AIOWS_LOG_LEVEL=WARNING
+export AIOWS_USE_JSON_FORMAT=true
+```
+
+### Configuration Profiles
+
+#### Development Profile (default)
+- Host: `localhost`, Port: `8000`
+- SSL: Optional
+- Logging: DEBUG level, detailed output
+- Rate limiting: Permissive (120 msg/min, 20 conn/IP)
+- Security: Relaxed for development
+
+#### Production Profile
+- Host: `0.0.0.0`, SSL: Required
+- Logging: WARNING level, JSON format, data sanitization
+- Rate limiting: Strict (30 msg/min, 5 conn/IP)
+- Security: Enhanced validation and protection
+
+#### Testing Profile
+- Host: `127.0.0.1`, Port: `8001`
+- Logging: ERROR level only
+- Rate limiting: Very permissive (1000 msg/min)
+- Fast timeouts for quick test execution
+
+### Using Configuration with Server
+
+```python
+from aiows import WebSocketServer, Router
+from aiows.settings import AiowsSettings
+from aiows.middleware import (
+    AuthMiddleware, 
+    RateLimitingMiddleware, 
+    ConnectionLimiterMiddleware,
+    LoggingMiddleware
+)
+
+# Load configuration
+settings = AiowsSettings(profile="production")
+
+# Create server with SSL if configured
+server = WebSocketServer(
+    is_production=settings.server.is_production,
+    require_ssl_in_production=settings.server.require_ssl_in_production
+)
+
+# Configure middleware using settings
+if settings.logging.enabled:
+    server.add_middleware(LoggingMiddleware(
+        logger_name=settings.logging.logger_name,
+        log_level=settings.logging.log_level,
+        use_json_format=settings.logging.use_json_format,
+        sanitize_data=settings.logging.sanitize_data
+    ))
+
+if settings.connection_limiter.enabled:
+    server.add_middleware(ConnectionLimiterMiddleware(
+        max_connections_per_ip=settings.connection_limiter.max_connections_per_ip,
+        max_connections_per_minute=settings.connection_limiter.max_connections_per_minute,
+        whitelist_ips=settings.connection_limiter.whitelist_ips
+    ))
+
+if settings.rate_limit.enabled:
+    server.add_middleware(RateLimitingMiddleware(
+        max_messages_per_minute=settings.rate_limit.max_messages_per_minute
+    ))
+
+if settings.auth.enabled:
+    server.add_middleware(AuthMiddleware(
+        secret_key=settings.auth.secret_key,
+        token_ttl=settings.auth.token_ttl,
+        enable_ip_validation=settings.auth.enable_ip_validation
+    ))
+
+# Configure server timeouts
+server.set_shutdown_timeout(settings.server.shutdown_timeout)
+
+# Start server
+server.run(
+    host=settings.server.host,
+    port=settings.server.port
+)
+```
+
+### Configuration Validation
+
+The configuration system includes built-in validation:
+
+```python
+from aiows.settings import AiowsSettings
+from aiows.config import ConfigValidationError
+
+try:
+    settings = AiowsSettings()
+    
+    # All validation happens automatically
+    settings.server.port = 8080  # Valid
+    settings.server.port = 0     # Raises ConfigValidationError
+    
+except ConfigValidationError as e:
+    print(f"Configuration error: {e}")
+```
+
+### Configuration Reloading
+
+Reload configuration from environment variables without restarting:
+
+```python
+settings = AiowsSettings()
+
+# Change environment variables
+os.environ['AIOWS_HOST'] = 'new.host.com'
+os.environ['AIOWS_PORT'] = '9000'
+
+# Reload configuration
+settings.reload()
+
+print(f"New host: {settings.server.host}")  # new.host.com
+print(f"New port: {settings.server.port}")  # 9000
+```
+
+### Export Environment Template
+
+Generate environment variable templates for deployment:
+
+```python
+from aiows.settings import AiowsSettings
+
+settings = AiowsSettings(profile="production")
+
+# Export complete environment template
+template = settings.export_env_template("production.env")
+
+# Example output:
+# AIOWS_PROFILE=production
+# AIOWS_HOST=0.0.0.0
+# AIOWS_PORT=8000
+# AIOWS_IS_PRODUCTION=true
+# AIOWS_SECRET_KEY=***CHANGE_ME***
+# ... (all configuration options with descriptions)
+```
+
+### Configuration Sections
+
+The configuration system includes these sections:
+
+- **ServerConfig**: Host, port, SSL, timeouts
+- **AuthConfig**: Authentication settings, tokens, security
+- **RateLimitConfig**: Message rate limiting
+- **ConnectionLimiterConfig**: Connection flood protection  
+- **LoggingConfig**: Logging levels, format, data sanitization
+- **SecurityConfig**: Message size limits, security headers
+
+### Advanced Configuration
+
+```python
+from aiows.config import BaseConfig, ConfigValue, positive_int
+
+# Create custom configuration section
+class MyAppConfig(BaseConfig):
+    database_url = ConfigValue(
+        default="sqlite:///app.db",
+        description="Database connection URL",
+        sensitive=True
+    )
+    
+    max_workers = ConfigValue(
+        default=4,
+        validator=positive_int,
+        type_cast=int,
+        description="Maximum worker processes"
+    )
+
+# Use in your application
+config = MyAppConfig()
+print(f"DB URL: {config.database_url}")
+print(f"Workers: {config.max_workers}")
+```
+
 ## Message Types
 
 Define typed message schemas with Pydantic:

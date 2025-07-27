@@ -3,9 +3,12 @@ Rate limiting middleware for aiows framework
 """
 
 import time
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
 from .base import BaseMiddleware
 from ..websocket import WebSocket
+
+if TYPE_CHECKING:
+    from ..settings import RateLimitConfig
 
 
 class RateLimitingMiddleware(BaseMiddleware):
@@ -16,10 +19,32 @@ class RateLimitingMiddleware(BaseMiddleware):
     and blocking clients that exceed the specified rate limit.
     """
     
-    def __init__(self, max_messages_per_minute: int = 60):
-        self.max_messages_per_minute = max_messages_per_minute
+    def __init__(self, 
+                 max_messages_per_minute: Optional[int] = None,
+                 window_duration: Optional[int] = None,
+                 config: Optional['RateLimitConfig'] = None):
+        # Load configuration
+        if config is not None:
+            self.max_messages_per_minute = config.max_messages_per_minute
+            self.window_duration = config.window_duration
+        else:
+            # Use provided parameters or defaults for backward compatibility
+            self.max_messages_per_minute = max_messages_per_minute or 60
+            self.window_duration = window_duration or 60  # 1 minute in seconds
+        
         self.clients: Dict[str, Dict[str, Any]] = {}
-        self.window_duration = 60  # 1 minute in seconds
+    
+    @classmethod
+    def from_config(cls, config: 'RateLimitConfig') -> 'RateLimitingMiddleware':
+        """Create RateLimitingMiddleware instance from RateLimitConfig
+        
+        Args:
+            config: RateLimitConfig instance with configuration
+            
+        Returns:
+            Configured RateLimitingMiddleware instance
+        """
+        return cls(config=config)
     
     def _get_client_id(self, websocket: WebSocket) -> str:
         user_id = websocket.context.get('user_id')

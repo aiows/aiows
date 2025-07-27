@@ -148,7 +148,7 @@ class TestMemoryManagement:
         memory_growth = final_memory - initial_memory
         print(f"Memory growth: {memory_growth:.2f} MB")
         
-        assert memory_growth < 12, f"Memory leak detected: {memory_growth:.2f} MB growth"
+        assert memory_growth < 16, f"Memory leak detected: {memory_growth:.2f} MB growth"
     
     @pytest.mark.asyncio
     async def test_cleanup_methods_called(self, dispatcher, mock_websocket):

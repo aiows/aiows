@@ -14,11 +14,14 @@ import time
 import warnings
 import weakref
 import websockets
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, TYPE_CHECKING
 from .router import Router
 from .dispatcher import MessageDispatcher
 from .websocket import WebSocket
 from .middleware.base import BaseMiddleware
+
+if TYPE_CHECKING:
+    from .settings import AiowsSettings
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +131,8 @@ class WebSocketServer:
                  ssl_context: Optional[ssl.SSLContext] = None,
                  is_production: bool = False,
                  require_ssl_in_production: bool = True,
-                 cert_config: Optional[Dict[str, str]] = None):
+                 cert_config: Optional[Dict[str, str]] = None,
+                 settings: Optional['AiowsSettings'] = None):
         """Initialize WebSocket server
         
         Args:
@@ -136,9 +140,45 @@ class WebSocketServer:
             is_production: Whether running in production environment
             require_ssl_in_production: Whether to require SSL in production
             cert_config: Certificate configuration (common_name, org_name, country)
+            settings: AiowsSettings instance for configuration (overrides other params)
         """
-        self.host: str = "localhost"
-        self.port: int = 8000
+        # Import here to avoid circular imports
+        if settings is None:
+            try:
+                from .settings import create_settings
+                settings = create_settings()
+            except ImportError:
+                # Fallback to defaults if settings not available
+                settings = None
+        
+        # Set server configuration from settings or parameters
+        if settings is not None:
+            self.host: str = settings.server.host
+            self.port: int = settings.server.port
+            self._cleanup_interval: float = settings.server.cleanup_interval
+            self._shutdown_timeout: float = settings.server.shutdown_timeout
+            
+            # Override parameters with settings if provided
+            if ssl_context is None and hasattr(settings.server, 'ssl_context'):
+                ssl_context = getattr(settings.server, 'ssl_context', None)
+            
+            is_production = settings.server.is_production
+            require_ssl_in_production = settings.server.require_ssl_in_production
+            
+            if not cert_config:
+                cert_config = {
+                    'common_name': settings.server.ssl_cert_common_name,
+                    'org_name': settings.server.ssl_cert_org_name,
+                    'country': settings.server.ssl_cert_country,
+                    'days': settings.server.ssl_cert_days
+                }
+        else:
+            # Fallback to hardcoded defaults for backward compatibility
+            self.host: str = "localhost"
+            self.port: int = 8000
+            self._cleanup_interval: float = 30.0
+            self._shutdown_timeout: float = 30.0
+        
         self.router: Router = Router()
         self.dispatcher: MessageDispatcher = MessageDispatcher(self.router)
         
@@ -146,7 +186,6 @@ class WebSocketServer:
         self._connection_count: int = 0
         self._total_connections: int = 0
         self._cleanup_task: Optional[asyncio.Task] = None
-        self._cleanup_interval: float = 30.0
         
         self._middleware: List[BaseMiddleware] = []
         
@@ -158,10 +197,28 @@ class WebSocketServer:
         
         self._shutdown_event: asyncio.Event = asyncio.Event()
         self._server_task: Optional[asyncio.Task] = None
-        self._shutdown_timeout: float = 30.0
         self._signal_handlers_registered: bool = False
         
+        # Store settings reference for potential future use
+        self._settings = settings
+        
         self._validate_ssl_configuration()
+    
+    @classmethod
+    def from_settings(cls, settings: 'AiowsSettings', ssl_context: Optional[ssl.SSLContext] = None) -> 'WebSocketServer':
+        """Create WebSocketServer instance from AiowsSettings
+        
+        Args:
+            settings: AiowsSettings instance with configuration
+            ssl_context: Optional SSL context (overrides settings)
+            
+        Returns:
+            Configured WebSocketServer instance
+        """
+        return cls(
+            ssl_context=ssl_context,
+            settings=settings
+        )
     
     def get_active_connections_count(self) -> int:
         return len(self._connections)
