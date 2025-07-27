@@ -1,20 +1,14 @@
-"""
-Thread safety tests for MessageDispatcher
-"""
-
 import asyncio
 import pytest
 import copy
 import time
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import AsyncMock
 
-from aiows import Router, MessageDispatcher, WebSocket, BaseMessage, ChatMessage
+from aiows import Router, MessageDispatcher, WebSocket, BaseMiddleware
 from aiows.exceptions import MessageValidationError, MiddlewareError, ConnectionError
-from aiows.middleware.base import BaseMiddleware
 
 
 class MockMiddleware(BaseMiddleware):
-    """Mock middleware for testing"""
     
     def __init__(self, name: str, should_fail: bool = False, fail_on: str = None):
         self.name = name
@@ -44,11 +38,9 @@ class MockMiddleware(BaseMiddleware):
 
 
 class TestDispatcherThreadSafety:
-    """Test thread safety of MessageDispatcher"""
     
     @pytest.fixture
     def mock_websocket(self):
-        """Create mock websocket for testing"""
         mock_ws = AsyncMock()
         mock_ws.closed = False
         mock_ws.close = AsyncMock()
@@ -56,15 +48,12 @@ class TestDispatcherThreadSafety:
     
     @pytest.fixture
     def websocket_wrapper(self, mock_websocket):
-        """Create WebSocket wrapper with mock"""
         return WebSocket(mock_websocket)
     
     @pytest.fixture
     def router(self):
-        """Create router with mock handlers"""
         router = Router()
         
-        # Mock handlers
         async def connect_handler(ws):
             pass
         
@@ -82,42 +71,33 @@ class TestDispatcherThreadSafety:
     
     @pytest.fixture
     def dispatcher(self, router):
-        """Create MessageDispatcher with router"""
         return MessageDispatcher(router)
     
     @pytest.mark.asyncio
     async def test_concurrent_middleware_addition(self, dispatcher):
-        """Test thread-safe middleware addition"""
         
         async def add_middleware_task(task_id):
-            """Task that adds middleware"""
             middleware = MockMiddleware(f"middleware_{task_id}")
             dispatcher.add_middleware(middleware)
             return f"added_{task_id}"
         
-        # Add middleware concurrently
         tasks = [add_middleware_task(i) for i in range(10)]
         results = await asyncio.gather(*tasks)
         
-        # All additions should succeed
         assert len(results) == 10
         assert all(r.startswith("added_") for r in results)
         
-        # Verify all middleware were added
         assert len(dispatcher._middleware) == 10
         for i, middleware in enumerate(dispatcher._middleware):
             assert middleware.name == f"middleware_{i}"
     
     @pytest.mark.asyncio 
     async def test_concurrent_message_processing(self, dispatcher, websocket_wrapper):
-        """Test concurrent message processing is safe"""
         
-        # Add some middleware
         dispatcher.add_middleware(MockMiddleware("mw1"))
         dispatcher.add_middleware(MockMiddleware("mw2"))
         
         async def process_message_task(task_id):
-            """Task that processes a message"""
             try:
                 message_data = {
                     "type": "chat",
@@ -130,21 +110,17 @@ class TestDispatcherThreadSafety:
             except Exception as e:
                 return f"error_{task_id}: {e}"
         
-        # Process messages concurrently
         tasks = [process_message_task(i) for i in range(20)]
         results = await asyncio.gather(*tasks)
         
-        # All should succeed
         success_count = sum(1 for r in results if r.startswith("processed_"))
         assert success_count == 20
         
-        # Verify middleware were called correct number of times
         assert dispatcher._middleware[0].message_calls == 20
         assert dispatcher._middleware[1].message_calls == 20
     
     @pytest.mark.asyncio
     async def test_message_data_defensive_copying(self, dispatcher, websocket_wrapper):
-        """Test that message data is safely copied to prevent race conditions"""
         
         original_data = {
             "type": "chat",
@@ -153,17 +129,14 @@ class TestDispatcherThreadSafety:
             "nested": {"data": "value"}
         }
         
-        # Create middleware that modifies the data
         class ModifyingMiddleware(BaseMiddleware):
             async def on_message(self, next_handler, websocket, message_data):
-                # Try to modify the data
                 message_data["text"] = "modified_message"
                 message_data["nested"]["data"] = "modified_value"
                 return await next_handler(websocket, message_data)
         
         dispatcher.add_middleware(ModifyingMiddleware())
         
-        # Process message multiple times
         tasks = []
         for i in range(5):
             task_data = copy.deepcopy(original_data)
@@ -172,19 +145,15 @@ class TestDispatcherThreadSafety:
         
         await asyncio.gather(*tasks)
         
-        # Original data should be unchanged
         assert original_data["text"] == "original_message"
         assert original_data["nested"]["data"] == "value"
     
     @pytest.mark.asyncio
     async def test_middleware_chain_memory_leak_prevention(self, dispatcher, websocket_wrapper):
-        """Test that middleware chains don't create memory leaks"""
         
-        # Add many middleware to stress test
         for i in range(50):
             dispatcher.add_middleware(MockMiddleware(f"mw_{i}"))
         
-        # Process many messages to test for memory leaks
         for i in range(100):
             message_data = {
                 "type": "chat", 
@@ -193,15 +162,11 @@ class TestDispatcherThreadSafety:
             }
             await dispatcher.dispatch_message(websocket_wrapper, message_data)
         
-        # If there were memory leaks, this would cause issues
-        # The test passing means chains are properly cleaned up
         assert len(dispatcher._middleware) == 50
     
     @pytest.mark.asyncio
     async def test_selective_exception_handling(self, dispatcher, websocket_wrapper):
-        """Test that exception handling is selective and appropriate"""
         
-        # Add middleware that raises different types of exceptions
         class ExceptionMiddleware(BaseMiddleware):
             def __init__(self, exception_type):
                 self.exception_type = exception_type
@@ -221,25 +186,20 @@ class TestDispatcherThreadSafety:
         
         message_data = {"type": "chat", "text": "test", "user_id": 1}
         
-        # Test middleware error (should be handled)
         dispatcher.add_middleware(ExceptionMiddleware("middleware"))
         try:
             await dispatcher.dispatch_message(websocket_wrapper, message_data)
-            # Should not raise for middleware errors
         except MiddlewareError:
             pytest.fail("MiddlewareError should be handled, not raised")
         
-        # Reset dispatcher
         dispatcher._middleware.clear()
         
-        # Test unexpected error (should be re-raised)
         dispatcher.add_middleware(ExceptionMiddleware("unexpected"))
         with pytest.raises(ValueError, match="Unexpected error"):
             await dispatcher.dispatch_message(websocket_wrapper, message_data)
     
     @pytest.mark.asyncio
     async def test_mixed_concurrent_operations(self, dispatcher, websocket_wrapper):
-        """Test mixed connect/disconnect/message operations concurrently"""
         
         dispatcher.add_middleware(MockMiddleware("test_mw"))
         
@@ -265,7 +225,6 @@ class TestDispatcherThreadSafety:
             except Exception as e:
                 return f"message_error_{msg_id}: {e}"
         
-        # Mix different operations
         tasks = [
             connect_task(),
             message_task(1), message_task(2),
@@ -275,20 +234,17 @@ class TestDispatcherThreadSafety:
         
         results = await asyncio.gather(*tasks)
         
-        # All operations should complete
         assert len(results) == 6
         success_count = sum(1 for r in results if not r.endswith("error"))
-        assert success_count >= 5  # Allow for some middleware-induced failures
+        assert success_count >= 5  
     
     @pytest.mark.asyncio
     async def test_state_consistency_under_load(self, dispatcher):
-        """Test state consistency under concurrent load"""
         
-        # Add middleware concurrently while processing messages
         async def add_middleware_continuously():
             for i in range(10):
                 dispatcher.add_middleware(MockMiddleware(f"load_mw_{i}"))
-                await asyncio.sleep(0.01)  # Small delay
+                await asyncio.sleep(0.01)
         
         async def process_messages_continuously():
             mock_ws = AsyncMock()
@@ -300,40 +256,32 @@ class TestDispatcherThreadSafety:
                 try:
                     await dispatcher.dispatch_message(ws_wrapper, message_data)
                 except Exception:
-                    pass  # Some may fail due to middleware changes
-                await asyncio.sleep(0.005)  # Small delay
+                    pass  
+                await asyncio.sleep(0.005)  
         
-        # Run both operations concurrently
         await asyncio.gather(
             add_middleware_continuously(),
             process_messages_continuously()
         )
         
-        # State should be consistent
         assert len(dispatcher._middleware) == 10
         
-        # All middleware should have proper names
         for i, middleware in enumerate(dispatcher._middleware):
             assert middleware.name == f"load_mw_{i}"
     
     @pytest.mark.asyncio
     async def test_performance_no_significant_degradation(self, dispatcher, websocket_wrapper):
-        """Test that thread safety doesn't significantly impact performance"""
         
-        # Add middleware
         dispatcher.add_middleware(MockMiddleware("perf_test"))
         
-        # Measure sequential processing
         start_time = time.time()
         for i in range(100):
             message_data = {"type": "chat", "text": f"seq_{i}", "user_id": i}
             await dispatcher.dispatch_message(websocket_wrapper, message_data)
         sequential_time = time.time() - start_time
         
-        # Reset middleware call counts
         dispatcher._middleware[0].message_calls = 0
         
-        # Measure concurrent processing (batched)
         start_time = time.time()
         batch_size = 10
         for i in range(0, 100, batch_size):
@@ -344,8 +292,7 @@ class TestDispatcherThreadSafety:
             await asyncio.gather(*tasks)
         concurrent_time = time.time() - start_time
         
-        # Performance should not degrade significantly
-        max_allowed_ratio = 3.0  # Allow more overhead for dispatcher complexity
+        max_allowed_ratio = 3.0  
         actual_ratio = concurrent_time / sequential_time if sequential_time > 0 else 1.0
         
         assert actual_ratio <= max_allowed_ratio, (
@@ -353,19 +300,17 @@ class TestDispatcherThreadSafety:
             f"(max allowed: {max_allowed_ratio}x)"
         )
         
-        # Verify all messages were processed
         assert dispatcher._middleware[0].message_calls == 100
     
     @pytest.mark.asyncio
     async def test_message_parsing_with_invalid_data(self, dispatcher, websocket_wrapper):
-        """Test safe message parsing with invalid data"""
         
         invalid_data_sets = [
-            {"type": "chat"},  # Missing required fields
-            {"type": "unknown_type", "data": "test"},  # Unknown type
-            {"text": "no type field"},  # Missing type
-            {},  # Empty data
-            {"type": "chat", "user_id": "not_a_number", "text": "test"}  # Type mismatch
+            {"type": "chat"},
+            {"type": "unknown_type", "data": "test"},
+            {"text": "no type field"},
+            {},
+            {"type": "chat", "user_id": "not_a_number", "text": "test"}
         ]
         
         results = []
@@ -378,13 +323,11 @@ class TestDispatcherThreadSafety:
             except Exception as e:
                 results.append(f"unexpected_error_{i}: {e}")
         
-        # All should result in validation errors or be handled gracefully
         validation_errors = sum(1 for r in results if "validation_error" in r)
-        assert validation_errors >= 4  # Most should be validation errors
+        assert validation_errors >= 4  
     
     @pytest.mark.asyncio
     async def test_asyncio_exception_propagation(self, dispatcher, websocket_wrapper):
-        """Test that asyncio exceptions are properly propagated"""
         
         class AsyncioExceptionMiddleware(BaseMiddleware):
             async def on_message(self, next_handler, websocket, message_data):
@@ -392,14 +335,12 @@ class TestDispatcherThreadSafety:
         
         dispatcher.add_middleware(AsyncioExceptionMiddleware())
         
-        # CancelledError should propagate
         with pytest.raises(asyncio.CancelledError):
             message_data = {"type": "chat", "text": "test", "user_id": 1}
             await dispatcher.dispatch_message(websocket_wrapper, message_data)
     
     @pytest.mark.asyncio
     async def test_critical_middleware_failure_handling(self, dispatcher, websocket_wrapper):
-        """Test handling of critical middleware failures"""
         
         class AuthMiddleware(BaseMiddleware):
             async def on_connect(self, next_handler, websocket):
@@ -407,11 +348,9 @@ class TestDispatcherThreadSafety:
         
         dispatcher.add_middleware(AuthMiddleware())
         
-        # Auth failure should close connection on connect
         await dispatcher.dispatch_connect(websocket_wrapper)
         
-        # Verify connection was closed due to auth failure
         websocket_wrapper._websocket.close.assert_called_once()
         args, kwargs = websocket_wrapper._websocket.close.call_args
-        assert kwargs.get('code') == 1011  # Server error code
+        assert kwargs.get('code') == 1011  
         assert kwargs.get('reason') == "Server error" 

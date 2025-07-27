@@ -1,14 +1,3 @@
-"""
-Runtime tests for aiows middleware system
-
-Tests all middleware components in real WebSocket scenarios:
-- AuthMiddleware with token validation
-- LoggingMiddleware with real log capture
-- RateLimitingMiddleware with actual rate limiting
-- Middleware chains and execution order
-- Context preservation and error handling
-"""
-
 import pytest
 import asyncio
 import json
@@ -35,17 +24,11 @@ from aiows import (
 )
 from aiows.middleware.auth import generate_auth_token
 
-
-# =============================================================================
-# TEST UTILITIES
-# =============================================================================
-
 def get_free_port():
     """Get a free port for testing"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(('', 0))
         return s.getsockname()[1]
-
 
 class RuntimeTestServer:
     """Helper for setting up test servers with middleware"""
@@ -57,12 +40,10 @@ class RuntimeTestServer:
         self.router = None
         
     def setup_basic_router(self):
-        """Setup basic router with test handlers"""
         router = Router()
         
         @router.connect()
         async def handle_connect(websocket: WebSocket):
-            # Send back user info from context if authenticated
             user_id = websocket.context.get('user_id', 'anonymous')
             authenticated = websocket.context.get('authenticated', False)
             
@@ -92,7 +73,6 @@ class RuntimeTestServer:
         return router
     
     def start_server_with_middleware(self, middleware_list):
-        """Start server with given middleware"""
         self.port = get_free_port()
         
         def run_server():
@@ -101,11 +81,9 @@ class RuntimeTestServer:
             
             self.server = WebSocketServer()
             
-            # Add middleware in order
             for middleware in middleware_list:
                 self.server.add_middleware(middleware)
             
-            # Add router
             router = self.setup_basic_router()
             self.server.include_router(router)
             
@@ -121,45 +99,32 @@ class RuntimeTestServer:
         return f"ws://localhost:{self.port}"
     
     def stop(self):
-        """Stop the server"""
         if self.server_thread:
             self.server_thread.join(timeout=1)
 
-
 @pytest.fixture
 def test_runtime_server():
-    """Fixture for runtime test server"""
     server = RuntimeTestServer()
     yield server
     server.stop()
 
-
-# =============================================================================
-# AUTH MIDDLEWARE RUNTIME TESTS
-# =============================================================================
-
 class TestAuthMiddlewareRuntime:
-    """Test AuthMiddleware in real WebSocket scenarios"""
     
     @pytest.mark.asyncio
     async def test_valid_token_authentication(self, test_runtime_server):
-        """Test authentication with valid token"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
-        # Generate valid JWT token
         jwt_token = generate_auth_token(
             user_id="user123",
             secret_key=secret_key,
             ttl_seconds=300
         )
         
-        # Connect with valid token in query
         valid_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(valid_uri) as websocket:
-            # Should receive connection message with user info
             response = await websocket.recv()
             data = json.loads(response)
             
@@ -169,19 +134,16 @@ class TestAuthMiddlewareRuntime:
     
     @pytest.mark.asyncio
     async def test_valid_token_in_headers(self, test_runtime_server):
-        """Test authentication with token in Authorization header"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
-        # Generate valid JWT token
         jwt_token = generate_auth_token(
             user_id="user456",
             secret_key=secret_key,
             ttl_seconds=300
         )
         
-        # Connect with Bearer token in headers
         headers = {"Authorization": f"Bearer {jwt_token}"}
         
         async with websockets.connect(uri, additional_headers=headers) as websocket:
@@ -194,26 +156,22 @@ class TestAuthMiddlewareRuntime:
     
     @pytest.mark.asyncio
     async def test_invalid_token_closes_connection(self, test_runtime_server):
-        """Test that invalid token closes connection"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key, auth_timeout=1)  # 1 second timeout for invalid auth
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=1)
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
-        # Connect with invalid token
         invalid_uri = f"{uri}?token=invalid_token"
         
         with pytest.raises(websockets.exceptions.ConnectionClosedError) as exc_info:
             async with websockets.connect(invalid_uri) as websocket:
                 await websocket.recv()
         
-        # Should close with code 4401 (authentication error)
         assert exc_info.value.code == 4401
     
     @pytest.mark.asyncio
     async def test_no_token_closes_connection(self, test_runtime_server):
-        """Test that missing token closes connection"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key, auth_timeout=1)  # 1 second timeout for tests
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=1)
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
         with pytest.raises(websockets.exceptions.ConnectionClosedError) as exc_info:
@@ -224,12 +182,10 @@ class TestAuthMiddlewareRuntime:
     
     @pytest.mark.asyncio
     async def test_authenticated_messaging(self, test_runtime_server):
-        """Test that authenticated users can send messages"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
-        # Generate valid JWT token
         jwt_token = generate_auth_token(
             user_id="testuser",
             secret_key=secret_key,
@@ -239,29 +195,17 @@ class TestAuthMiddlewareRuntime:
         valid_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(valid_uri) as websocket:
-            # Skip connection message
             await websocket.recv()
-            
-            # Send test message
             await websocket.send(json.dumps({"type": "test", "data": "hello"}))
-            
-            # Should receive response with user info
             response = await websocket.recv()
             data = json.loads(response)
             
             assert data["type"] == "test_response"
             assert data["user_id"] == "testuser"
 
-
-# =============================================================================
-# LOGGING MIDDLEWARE RUNTIME TESTS  
-# =============================================================================
-
 class TestLoggingMiddlewareRuntime:
-    """Test LoggingMiddleware in real scenarios"""
     
     def setup_log_capture(self):
-        """Setup log capture for testing"""
         log_stream = StringIO()
         handler = logging.StreamHandler(log_stream)
         handler.setLevel(logging.INFO)
@@ -274,38 +218,29 @@ class TestLoggingMiddlewareRuntime:
     
     @pytest.mark.asyncio
     async def test_connection_logging(self, test_runtime_server):
-        """Test that connections are logged"""
         log_stream, logger = self.setup_log_capture()
         
         logging_middleware = LoggingMiddleware("aiows.test")
         uri = test_runtime_server.start_server_with_middleware([logging_middleware])
         
         async with websockets.connect(uri) as websocket:
-            await websocket.recv()  # Get connection message
-            
-            # Small delay for logs to be written
+            await websocket.recv()
             await asyncio.sleep(0.1)
         
         logs = log_stream.getvalue()
         assert "WebSocket connection established" in logs
-        # Note: connection closed log might be in different logger due to timing
-        # The test above shows the log is actually written, just may not appear in our stream
     
     @pytest.mark.asyncio
     async def test_message_logging(self, test_runtime_server):
-        """Test that messages are logged with details"""
         log_stream, logger = self.setup_log_capture()
         
         logging_middleware = LoggingMiddleware("aiows.test")
         uri = test_runtime_server.start_server_with_middleware([logging_middleware])
         
         async with websockets.connect(uri) as websocket:
-            await websocket.recv()  # Skip connection message
-            
-            # Send test message
+            await websocket.recv()
             await websocket.send(json.dumps({"type": "test", "data": "test_message"}))
-            await websocket.recv()  # Get response
-            
+            await websocket.recv()
             await asyncio.sleep(0.1)
         
         logs = log_stream.getvalue()
@@ -314,38 +249,25 @@ class TestLoggingMiddlewareRuntime:
         assert "Message Type: test" in logs
         assert "Processing Time:" in logs
 
-
-# =============================================================================
-# RATE LIMITING MIDDLEWARE RUNTIME TESTS
-# =============================================================================
-
 class TestRateLimitingMiddlewareRuntime:
-    """Test RateLimitingMiddleware with real rate limiting"""
     
     @pytest.mark.asyncio
     async def test_rate_limit_enforcement(self, test_runtime_server):
-        """Test that rate limit is enforced"""
-        # Set very low limit for testing
         rate_middleware = RateLimitingMiddleware(max_messages_per_minute=2)
         uri = test_runtime_server.start_server_with_middleware([rate_middleware])
         
         async with websockets.connect(uri) as websocket:
-            await websocket.recv()  # Skip connection message
-            
-            # Send first message - should work
+            await websocket.recv()
             await websocket.send(json.dumps({"type": "test", "data": "msg1"}))
             response1 = json.loads(await websocket.recv())
             assert response1["remaining_messages"] == 1
             
-            # Send second message - should work
             await websocket.send(json.dumps({"type": "test", "data": "msg2"}))
             response2 = json.loads(await websocket.recv())
             assert response2["remaining_messages"] == 0
             
-            # Send third message - should close connection
             await websocket.send(json.dumps({"type": "test", "data": "msg3"}))
             
-            # Connection should be closed with rate limit code
             with pytest.raises(websockets.exceptions.ConnectionClosedError) as exc_info:
                 await websocket.recv()
             
@@ -353,15 +275,12 @@ class TestRateLimitingMiddlewareRuntime:
     
     @pytest.mark.asyncio
     async def test_rate_limit_with_user_identification(self, test_runtime_server):
-        """Test rate limiting per user"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)
         rate_middleware = RateLimitingMiddleware(max_messages_per_minute=1)
         
         uri = test_runtime_server.start_server_with_middleware([auth_middleware, rate_middleware])
         
-        # User 1
-        # Generate valid JWT token
         jwt_token = generate_auth_token(
             user_id="user1",
             secret_key=secret_key,
@@ -370,14 +289,10 @@ class TestRateLimitingMiddlewareRuntime:
         
         valid_uri = f"{uri}?token={jwt_token}"
         async with websockets.connect(valid_uri) as ws1:
-            await ws1.recv()  # Skip connection
-            
-            # User 1 sends message - should work
+            await ws1.recv()
             await ws1.send(json.dumps({"type": "test", "data": "user1_msg"}))
             await ws1.recv()
             
-            # User 2 (different user) should still be able to send
-            # Generate valid JWT token
         jwt_token = generate_auth_token(
             user_id="user2",
             secret_key=secret_key,
@@ -387,34 +302,23 @@ class TestRateLimitingMiddlewareRuntime:
         user2_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(user2_uri) as ws2:
-            await ws2.recv()  # Skip connection
-            
-            # User 2 sends message - should work (different rate limit)
+            await ws2.recv()
             await ws2.send(json.dumps({"type": "test", "data": "user2_msg"}))
             response = json.loads(await ws2.recv())
             assert response["user_id"] == "user2"
 
-
-# =============================================================================
-# MIDDLEWARE CHAINS RUNTIME TESTS
-# =============================================================================
-
 class TestMiddlewareChainRuntime:
-    """Test middleware chain execution and interaction"""
     
     @pytest.mark.asyncio
     async def test_middleware_execution_order(self, test_runtime_server):
-        """Test that middleware execute in correct order"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)
         logging_middleware = LoggingMiddleware("aiows.chain")
         rate_middleware = RateLimitingMiddleware(max_messages_per_minute=10)
         
-        # Order: auth -> logging -> rate limiting
         middleware_chain = [auth_middleware, logging_middleware, rate_middleware]
         uri = test_runtime_server.start_server_with_middleware(middleware_chain)
         
-        # Generate valid JWT token
         jwt_token = generate_auth_token(
             user_id="userX",
             secret_key=secret_key,
@@ -424,52 +328,42 @@ class TestMiddlewareChainRuntime:
         valid_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(valid_uri) as websocket:
-            # Should pass through all middleware
             response = await websocket.recv()
             data = json.loads(response)
             
-            # Verify auth worked
             assert data["authenticated"] == True
             assert data["user_id"] == "userX"
             
-            # Send message to verify all middleware work together
             await websocket.send(json.dumps({"type": "test", "data": "chain_test"}))
             response = json.loads(await websocket.recv())
             
-            # Should have user info (auth) and rate limit info (rate limiting)
             assert response["user_id"] == "userX"
             assert "remaining_messages" in response
     
     @pytest.mark.asyncio
     async def test_middleware_error_stops_chain(self, test_runtime_server):
-        """Test that middleware error stops execution chain"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key, auth_timeout=1)  # 1 second timeout for failed auth
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=1)
         rate_middleware = RateLimitingMiddleware(max_messages_per_minute=10)
         
-        # Auth should fail and prevent rate middleware from running
         middleware_chain = [auth_middleware, rate_middleware]
         uri = test_runtime_server.start_server_with_middleware(middleware_chain)
         
-        # No token - should fail in auth middleware
         with pytest.raises(websockets.exceptions.ConnectionClosedError) as exc_info:
             async with websockets.connect(uri) as websocket:
                 await websocket.recv()
         
-        # Should fail with auth error code, not reach rate limiting
         assert exc_info.value.code == 4401
     
     @pytest.mark.asyncio 
     async def test_context_preservation_across_middleware(self, test_runtime_server):
-        """Test that context is preserved across middleware chain"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)  # 3 seconds for successful auth
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=3)
         rate_middleware = RateLimitingMiddleware(max_messages_per_minute=5)
         
         middleware_chain = [auth_middleware, rate_middleware]
         uri = test_runtime_server.start_server_with_middleware(middleware_chain)
         
-        # Generate valid JWT token
         jwt_token = generate_auth_token(
             user_id="contextuser",
             secret_key=secret_key,
@@ -479,32 +373,21 @@ class TestMiddlewareChainRuntime:
         valid_uri = f"{uri}?token={jwt_token}"
         
         async with websockets.connect(valid_uri) as websocket:
-            await websocket.recv()  # Skip connection
-            
-            # Send message
+            await websocket.recv()
             await websocket.send(json.dumps({"type": "test", "data": "context_test"}))
             response = json.loads(await websocket.recv())
             
-            # Should have both auth context (user_id) and rate limit context
-            assert response["user_id"] == "contextuser"  # From auth middleware
-            assert response["remaining_messages"] == 4  # From rate middleware
-
-
-# =============================================================================
-# PERFORMANCE AND EDGE CASES
-# =============================================================================
+            assert response["user_id"] == "contextuser"
+            assert response["remaining_messages"] == 4
 
 class TestMiddlewarePerformance:
-    """Test middleware performance and edge cases"""
     
     @pytest.mark.asyncio
     async def test_rapid_connection_attempts(self, test_runtime_server):
-        """Test rapid connection attempts with auth middleware"""
         secret_key = "test_secret_key_32_characters_long_12345"
-        auth_middleware = AuthMiddleware(secret_key, auth_timeout=1)  # 1 second timeout for rapid tests
+        auth_middleware = AuthMiddleware(secret_key, auth_timeout=1)
         uri = test_runtime_server.start_server_with_middleware([auth_middleware])
         
-        # Rapid invalid connection attempts
         tasks = []
         for i in range(5):
             async def try_connect():
@@ -519,32 +402,26 @@ class TestMiddlewarePerformance:
         
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # All should be closed due to no auth token
         for result in results:
             assert result == "closed"
     
     @pytest.mark.asyncio
     async def test_concurrent_rate_limiting(self, test_runtime_server):
-        """Test rate limiting with concurrent connections"""
         rate_middleware = RateLimitingMiddleware(max_messages_per_minute=3)
         uri = test_runtime_server.start_server_with_middleware([rate_middleware])
         
-        # Two concurrent connections
         async with websockets.connect(uri) as ws1, websockets.connect(uri) as ws2:
-            await ws1.recv()  # Skip connection messages
+            await ws1.recv()
             await ws2.recv()
             
-            # Each connection should have independent rate limits
             await ws1.send(json.dumps({"type": "test", "data": "ws1_msg1"}))
             await ws2.send(json.dumps({"type": "test", "data": "ws2_msg1"}))
             
             response1 = json.loads(await ws1.recv())
             response2 = json.loads(await ws2.recv())
             
-            # Both should have remaining messages (independent limits)
             assert response1["remaining_messages"] == 2
             assert response2["remaining_messages"] == 2
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"]) 

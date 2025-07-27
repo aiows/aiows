@@ -1,7 +1,3 @@
-"""
-Test input validation system for security protection
-"""
-
 import pytest
 import time
 from pydantic import ValidationError
@@ -14,10 +10,7 @@ from aiows.validators import (
 
 
 class TestSQLInjectionProtection:
-    """Test SQL injection attack protection"""
-    
     def test_sql_injection_patterns_detected(self):
-        """Test that common SQL injection patterns are detected"""
         malicious_inputs = [
             "'; DROP TABLE users; --",
             "1' OR '1'='1",
@@ -34,7 +27,6 @@ class TestSQLInjectionProtection:
             assert not SecurityValidator.is_safe_string(malicious_input)
     
     def test_safe_text_rejects_sql_injection(self):
-        """Test that ChatMessage rejects SQL injection attempts"""
         with pytest.raises(ValidationError) as exc_info:
             ChatMessage(
                 text="Hello'; DROP TABLE users; --",
@@ -44,25 +36,20 @@ class TestSQLInjectionProtection:
         assert "dangerous patterns" in str(exc_info.value).lower()
     
     def test_valid_sql_like_text_allowed(self):
-        """Test that legitimate text with SQL-like words is allowed (after sanitization)"""
         valid_messages = [
             "I want to select a good restaurant",
-            "Lets join the union meeting",  # Note: apostrophe removed for security
+            "Lets join the union meeting",
             "Please update me on the status", 
             "I need to delete this file from my computer",
         ]
         
         for message in valid_messages:
-            # Should not raise validation error
             chat_msg = ChatMessage(text=message, user_id=1)
             assert chat_msg.text == message
 
 
 class TestXSSProtection:
-    """Test XSS attack protection"""
-    
     def test_xss_patterns_detected(self):
-        """Test that XSS patterns are detected"""
         xss_payloads = [
             "<script>alert('XSS')</script>",
             "<iframe src='javascript:alert(1)'></iframe>",
@@ -81,7 +68,6 @@ class TestXSSProtection:
             assert not SecurityValidator.is_safe_string(payload)
     
     def test_safe_html_like_text_allowed(self):
-        """Test that safe HTML-like text is allowed after sanitization"""
         safe_texts = [
             "I love programming in <language>",
             "The temperature is <20 degrees",
@@ -90,17 +76,12 @@ class TestXSSProtection:
         ]
         
         for text in safe_texts:
-            # Should not raise validation error (after sanitization)
             chat_msg = ChatMessage(text=text, user_id=1)
-            # Text should be sanitized
             assert chat_msg.text is not None
 
 
 class TestCommandInjectionProtection:
-    """Test command injection protection"""
-    
     def test_command_injection_patterns_detected(self):
-        """Test that command injection patterns are detected"""
         command_payloads = [
             "test; rm -rf /",
             "name && cat /etc/passwd",
@@ -120,10 +101,7 @@ class TestCommandInjectionProtection:
 
 
 class TestPathTraversalProtection:
-    """Test path traversal protection"""
-    
     def test_path_traversal_patterns_detected(self):
-        """Test that path traversal patterns are detected"""
         path_payloads = [
             "../../../etc/passwd",
             "..\\..\\..\\windows\\system32\\config\\sam",
@@ -141,30 +119,25 @@ class TestPathTraversalProtection:
 
 
 class TestSanitization:
-    """Test input sanitization"""
-    
     def test_text_sanitization(self):
-        """Test that dangerous characters are removed from text"""
         dangerous_text = "Hello<script>alert('xss')</script>world"
         sanitized = Sanitizer.sanitize_text(dangerous_text)
         
         assert "<" not in sanitized
         assert ">" not in sanitized
-        assert "script" in sanitized  # Word itself is okay
+        assert "script" in sanitized
         assert "Hello" in sanitized
         assert "world" in sanitized
     
     def test_identifier_sanitization(self):
-        """Test username/room_id sanitization"""
         dangerous_id = "user<script>123"
         sanitized = Sanitizer.sanitize_identifier(dangerous_id)
         
-        assert sanitized == "userscript123"  # HTML chars removed, text preserved
+        assert sanitized == "userscript123"
         assert "<" not in sanitized
         assert ">" not in sanitized
     
     def test_action_sanitization(self):
-        """Test game action sanitization"""
         dangerous_action = "move; rm -rf /"
         sanitized = Sanitizer.sanitize_action(dangerous_action)
         
@@ -174,10 +147,7 @@ class TestSanitization:
 
 
 class TestWhitelistValidation:
-    """Test whitelist-based validation"""
-    
     def test_username_whitelist(self):
-        """Test username whitelist validation"""
         valid_usernames = ["user123", "test_user", "user.name", "user-name"]
         invalid_usernames = ["user@domain", "user<script>", "user&admin", "user|cmd"]
         
@@ -188,7 +158,6 @@ class TestWhitelistValidation:
             assert not WhitelistValidator.validate_username(username)
     
     def test_room_id_whitelist(self):
-        """Test room ID whitelist validation"""
         valid_room_ids = ["room123", "test-room", "room_name"]
         invalid_room_ids = ["room.with.dots", "room@domain", "room<script>"]
         
@@ -199,7 +168,6 @@ class TestWhitelistValidation:
             assert not WhitelistValidator.validate_room_id(room_id)
     
     def test_action_whitelist(self):
-        """Test game action whitelist validation"""
         valid_actions = ["move", "attack", "defend", "jump", "run"]
         invalid_actions = ["hack", "exploit", "delete", "format", "evil_action"]
         
@@ -211,10 +179,7 @@ class TestWhitelistValidation:
 
 
 class TestSizeLimits:
-    """Test size limit enforcement"""
-    
     def test_text_length_limit(self):
-        """Test that oversized text is rejected"""
         oversized_text = "a" * (SecurityLimits.MAX_TEXT_LENGTH + 1)
         
         with pytest.raises(ValidationError) as exc_info:
@@ -223,14 +188,12 @@ class TestSizeLimits:
         assert "too long" in str(exc_info.value).lower()
     
     def test_username_length_limit(self):
-        """Test that oversized username is rejected"""
         oversized_username = "a" * (SecurityLimits.MAX_USERNAME_LENGTH + 1)
         
         with pytest.raises(ValidationError):
             JoinRoomMessage(room_id="test", user_name=oversized_username)
     
     def test_room_id_length_limit(self):
-        """Test that oversized room ID is rejected"""
         oversized_room_id = "a" * (SecurityLimits.MAX_ROOM_ID_LENGTH + 1)
         
         with pytest.raises(ValidationError):
@@ -238,11 +201,7 @@ class TestSizeLimits:
 
 
 class TestJSONBombProtection:
-    """Test JSON bomb protection"""
-    
     def test_deep_nesting_protection(self):
-        """Test protection against deeply nested JSON"""
-        # Create deeply nested structure
         deep_data = {}
         current = deep_data
         for i in range(SecurityLimits.MAX_JSON_DEPTH + 5):
@@ -252,23 +211,18 @@ class TestJSONBombProtection:
         assert JSONBombProtector.check_json_bomb(deep_data)
     
     def test_large_array_protection(self):
-        """Test protection against oversized arrays"""
         large_array = ["item"] * (SecurityLimits.MAX_ARRAY_LENGTH + 1)
         
         assert JSONBombProtector.check_json_bomb(large_array)
     
     def test_large_object_protection(self):
-        """Test protection against objects with too many keys"""
         large_object = {f"key_{i}": f"value_{i}" for i in range(SecurityLimits.MAX_OBJECT_KEYS + 1)}
         
         assert JSONBombProtector.check_json_bomb(large_object)
 
 
 class TestValidDataHandling:
-    """Test that valid data passes validation"""
-    
     def test_valid_chat_message(self):
-        """Test that valid chat messages are accepted"""
         valid_message = ChatMessage(
             text="Hello, how are you today?",
             user_id=123
@@ -279,7 +233,6 @@ class TestValidDataHandling:
         assert valid_message.type == "chat"
     
     def test_valid_join_room_message(self):
-        """Test that valid join room messages are accepted"""
         valid_message = JoinRoomMessage(
             room_id="game_room_1",
             user_name="player123"
@@ -290,7 +243,6 @@ class TestValidDataHandling:
         assert valid_message.type == "join_room"
     
     def test_valid_game_action_message(self):
-        """Test that valid game actions are accepted"""
         valid_message = GameActionMessage(
             action="move",
             coordinates=(10, 20)
@@ -302,10 +254,7 @@ class TestValidDataHandling:
 
 
 class TestCoordinatesValidation:
-    """Test coordinates validation"""
-    
     def test_valid_coordinates(self):
-        """Test that valid coordinates are accepted"""
         valid_coords = [(0, 0), (100, 200), (-50, 75), (9999, -9999)]
         
         for coords in valid_coords:
@@ -313,13 +262,12 @@ class TestCoordinatesValidation:
             assert message.coordinates == coords
     
     def test_invalid_coordinates_type(self):
-        """Test that invalid coordinate types are rejected"""
         invalid_coords = [
             "not_coords",
-            [1, 2, 3],  # Too many elements
-            [1],  # Too few elements
-            (1.5, 2.5),  # Float coordinates
-            ("x", "y"),  # String coordinates
+            [1, 2, 3],
+            [1],
+            (1.5, 2.5),
+            ("x", "y"),
         ]
         
         for coords in invalid_coords:
@@ -327,12 +275,11 @@ class TestCoordinatesValidation:
                 GameActionMessage(action="move", coordinates=coords)
     
     def test_coordinates_range_limits(self):
-        """Test that coordinates outside allowed range are rejected"""
         invalid_coords = [
-            (100000, 0),  # X too large
-            (0, 100000),  # Y too large
-            (-100000, 0),  # X too small
-            (0, -100000),  # Y too small
+            (100000, 0),
+            (0, 100000),
+            (-100000, 0),
+            (0, -100000),
         ]
         
         for coords in invalid_coords:
@@ -341,10 +288,7 @@ class TestCoordinatesValidation:
 
 
 class TestUserIdValidation:
-    """Test user ID validation"""
-    
     def test_valid_user_ids(self):
-        """Test that valid user IDs are accepted"""
         valid_ids = [1, 100, 1000000, 2147483647]
         
         for user_id in valid_ids:
@@ -352,13 +296,12 @@ class TestUserIdValidation:
             assert message.user_id == user_id
     
     def test_invalid_user_ids(self):
-        """Test that invalid user IDs are rejected"""
         invalid_ids = [
-            0,  # Too small
-            -1,  # Negative
-            2147483648,  # Too large
-            "123",  # String
-            1.5,  # Float
+            0,
+            -1,
+            2147483648,
+            "123",
+            1.5,
         ]
         
         for user_id in invalid_ids:
@@ -367,13 +310,9 @@ class TestUserIdValidation:
 
 
 class TestPerformanceImpact:
-    """Test that validation has minimal performance impact"""
-    
     def test_validation_performance(self):
-        """Test that validation doesn't significantly slow down message processing"""
         test_message = "This is a normal message with reasonable length"
         
-        # Measure time for multiple validations
         start_time = time.time()
         
         for _ in range(1000):
@@ -382,11 +321,9 @@ class TestPerformanceImpact:
         end_time = time.time()
         total_time = end_time - start_time
         
-        # Should process 1000 messages in less than 1 second
         assert total_time < 1.0, f"Validation too slow: {total_time:.3f}s for 1000 messages"
     
     def test_complex_validation_performance(self):
-        """Test performance with more complex validation scenarios"""
         complex_message = "This is a longer message with various characters: 123 !@# $%^ &*() -=+ []{}|\\:;\"'<>,.?/"
         
         start_time = time.time()
@@ -395,12 +332,11 @@ class TestPerformanceImpact:
             try:
                 ChatMessage(text=complex_message, user_id=123)
             except ValidationError:
-                pass  # Expected for some complex characters
+                pass
         
         end_time = time.time()
         total_time = end_time - start_time
         
-        # Should process 100 complex messages in less than 0.5 seconds
         assert total_time < 0.5, f"Complex validation too slow: {total_time:.3f}s for 100 messages"
 
 
