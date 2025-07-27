@@ -8,7 +8,7 @@ from .websocket import WebSocket
 from .dispatcher import MessageDispatcher
 from .types import BaseMessage, ChatMessage, JoinRoomMessage, GameActionMessage
 from .exceptions import AiowsException, ConnectionError, MessageValidationError
-from .middleware import BaseMiddleware, AuthMiddleware, LoggingMiddleware, RateLimitingMiddleware
+from .middleware import BaseMiddleware, AuthMiddleware, LoggingMiddleware, RateLimitingMiddleware, ConnectionLimiterMiddleware
 
 __all__ = [
     "WebSocketServer",
@@ -25,7 +25,8 @@ __all__ = [
     "BaseMiddleware",
     "AuthMiddleware",
     "LoggingMiddleware", 
-    "RateLimitingMiddleware"
+    "RateLimitingMiddleware",
+    "ConnectionLimiterMiddleware"
 ]
 
 __version__ = "0.1.0" 
