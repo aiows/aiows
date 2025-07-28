@@ -569,10 +569,7 @@ class WebSocketServer:
             while not ws_wrapper.closed and not self._shutdown_event.is_set():
                 try:
                     try:
-                        message_data = await asyncio.wait_for(
-                            ws_wrapper.receive_json(),
-                            timeout=1.0
-                        )
+                        message_data = await ws_wrapper.receive_json()
                         await self.dispatcher.dispatch_message(ws_wrapper, message_data)
                     except asyncio.TimeoutError:
                         continue
