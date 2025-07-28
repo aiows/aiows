@@ -366,7 +366,7 @@ class TestServerConnectionManagement:
         assert server.port == 8000
         assert server.router is not None
         assert server.dispatcher is not None
-        assert isinstance(server._connections, weakref.WeakSet)
+        assert isinstance(server._connections, set)
 
 class TestFullChatFlow:
     

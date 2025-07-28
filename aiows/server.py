@@ -12,9 +12,8 @@ import subprocess
 import tempfile
 import time
 import warnings
-import weakref
 import websockets
-from typing import Dict, List, Optional, Union, TYPE_CHECKING
+from typing import Dict, List, Optional, Union, TYPE_CHECKING, Set
 from .router import Router
 from .dispatcher import MessageDispatcher
 from .websocket import WebSocket
@@ -182,9 +181,10 @@ class WebSocketServer:
         self.router: Router = Router()
         self.dispatcher: MessageDispatcher = MessageDispatcher(self.router)
         
-        self._connections: weakref.WeakSet = weakref.WeakSet()
+        self._connections: Set[WebSocket] = set()
         self._connection_count: int = 0
         self._total_connections: int = 0
+        self._connections_lock: asyncio.Lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
         
         self._middleware: List[BaseMiddleware] = []
@@ -221,14 +221,19 @@ class WebSocketServer:
         )
     
     def get_active_connections_count(self) -> int:
+        # For backward compatibility, keep this synchronous
+        # Race conditions are handled by the lock in async operations
         return len(self._connections)
     
     def get_total_connections_count(self) -> int:
         return self._total_connections
     
     def get_connection_stats(self) -> Dict[str, int]:
+        # For backward compatibility, keep this synchronous
+        # Note: This may not be perfectly synchronized, but it's for monitoring only
+        active_count = len(self._connections)
         return {
-            'active_connections': len(self._connections),
+            'active_connections': active_count,
             'total_connections': self._total_connections,
             'connection_count_tracked': self._connection_count
         }
@@ -253,54 +258,75 @@ class WebSocketServer:
                 await asyncio.sleep(self._cleanup_interval)
                 if self._shutdown_event.is_set():
                     break
-                await self._cleanup_orphaned_connections()
+                await self._cleanup_dead_connections()
         except asyncio.CancelledError:
             logger.debug("Periodic cleanup task cancelled")
         except Exception as e:
             logger.warning(f"Error in periodic cleanup: {e}")
     
-    async def _cleanup_orphaned_connections(self) -> None:
+    async def _cleanup_dead_connections(self) -> None:
+        """Periodically clean up closed connections from the set"""
         try:
-            connections_snapshot = list(self._connections)
-            orphaned_count = 0
-            
-            for ws in connections_snapshot:
-                try:
-                    if hasattr(ws, 'closed') and ws.closed:
-                        if ws in self._connections:
-                            self._connections.discard(ws)
-                            orphaned_count += 1
-                            self._connection_count = max(0, self._connection_count - 1)
-                except Exception as e:
-                    logger.debug(f"Error checking connection state: {e}")
+            # Single atomic operation - identify and remove dead connections in one go
+            async with self._connections_lock:
+                dead_connections = []
+                
+                # Identify dead connections while holding the lock
+                for ws in list(self._connections):
                     try:
+                        if hasattr(ws, 'closed') and ws.closed:
+                            dead_connections.append(ws)
+                    except Exception as e:
+                        logger.debug(f"Error checking connection state: {e}")
+                        dead_connections.append(ws)
+                
+                # Remove dead connections immediately
+                removed_count = 0
+                for ws in dead_connections:
+                    if ws in self._connections:
                         self._connections.discard(ws)
-                        orphaned_count += 1
-                        self._connection_count = max(0, self._connection_count - 1)
-                    except Exception:
-                        pass
-            
-            if orphaned_count > 0:
-                logger.debug(f"Cleaned up {orphaned_count} orphaned connections")
+                        removed_count += 1
+                
+                # Update connection count atomically
+                self._connection_count = max(0, self._connection_count - removed_count)
+                
+                # Debug assertion to ensure count synchronization
+                if __debug__:
+                    assert len(self._connections) == self._connection_count, f"Connection count mismatch after cleanup: {len(self._connections)} != {self._connection_count}"
+                
+                if removed_count > 0:
+                    logger.debug(f"Cleaned up {removed_count} dead connections")
                 
         except Exception as e:
-            logger.warning(f"Error during orphaned connection cleanup: {e}")
+            logger.warning(f"Error during dead connection cleanup: {e}")
     
-    def _add_connection(self, ws: WebSocket) -> None:
+    async def _add_connection(self, ws: WebSocket) -> None:
         try:
-            self._connections.add(ws)
-            self._connection_count += 1
-            self._total_connections += 1
-            logger.debug(f"Added connection, active: {len(self._connections)}, total: {self._total_connections}")
+            async with self._connections_lock:
+                self._connections.add(ws)
+                self._connection_count += 1
+                self._total_connections += 1
+                
+                # Debug assertion to ensure count synchronization
+                if __debug__:
+                    assert len(self._connections) == self._connection_count, f"Connection count mismatch after add: {len(self._connections)} != {self._connection_count}"
+                
+                logger.debug(f"Added connection, active: {len(self._connections)}, total: {self._total_connections}")
         except Exception as e:
             logger.warning(f"Error adding connection: {e}")
     
-    def _remove_connection(self, ws: WebSocket) -> None:
+    async def _remove_connection(self, ws: WebSocket) -> None:
         try:
-            if ws in self._connections:
-                self._connections.discard(ws)
-                self._connection_count = max(0, self._connection_count - 1)
-                logger.debug(f"Removed connection, active: {len(self._connections)}")
+            async with self._connections_lock:
+                if ws in self._connections:
+                    self._connections.discard(ws)
+                    self._connection_count = max(0, self._connection_count - 1)
+                    
+                    # Debug assertion to ensure count synchronization
+                    if __debug__:
+                        assert len(self._connections) == self._connection_count, f"Connection count mismatch after remove: {len(self._connections)} != {self._connection_count}"
+                    
+                    logger.debug(f"Removed connection, active: {len(self._connections)}")
         except Exception as e:
             logger.warning(f"Error removing connection: {e}")
     
@@ -448,14 +474,17 @@ class WebSocketServer:
         logger.info("Graceful shutdown completed")
     
     async def _close_all_connections(self, timeout: float) -> None:
-        if not self._connections:
-            return
+        # Check if there are connections to close
+        async with self._connections_lock:
+            if not self._connections:
+                return
+            connection_count = len(self._connections)
+            connections_snapshot = list(self._connections)
         
-        logger.info(f"Closing {len(self._connections)} active connections...")
+        logger.info(f"Closing {connection_count} active connections...")
         start_time = time.time()
         
         close_tasks = []
-        connections_snapshot = list(self._connections)
         
         for ws in connections_snapshot:
             try:
@@ -464,7 +493,7 @@ class WebSocketServer:
                     close_tasks.append(task)
             except Exception as e:
                 logger.debug(f"Error initiating close for connection: {e}")
-                self._remove_connection(ws)
+                await self._remove_connection(ws)
         
         if close_tasks:
             try:
@@ -476,28 +505,35 @@ class WebSocketServer:
                 elapsed = time.time() - start_time
                 logger.warning(f"Connection close timeout after {elapsed:.1f}s, forcing closure")
                 
-                remaining_connections = list(self._connections)
+                # Get fresh snapshot after timeout
+                async with self._connections_lock:
+                    remaining_connections = list(self._connections)
+                
                 for ws in remaining_connections:
                     try:
                         if not ws.closed:
                             asyncio.create_task(ws.close(code=1001, reason="Server shutdown"))
-                        self._remove_connection(ws)
+                        await self._remove_connection(ws)
                     except Exception as e:
                         logger.debug(f"Error force-closing connection: {str(e)}")
-                        self._remove_connection(ws)
+                        await self._remove_connection(ws)
         
+        # Wait for connections to finish closing
         for _ in range(10):
-            if not self._connections:
-                break
+            async with self._connections_lock:
+                if not self._connections:
+                    break
+                remaining = len(self._connections)
             await asyncio.sleep(0.1)
         
-        remaining = len(self._connections)
-        if remaining > 0:
-            logger.warning(f"{remaining} connections did not close gracefully")
-            self._connections.clear()
-            self._connection_count = 0
-        else:
-            logger.info("All connections closed successfully")
+        async with self._connections_lock:
+            remaining = len(self._connections)
+            if remaining > 0:
+                logger.warning(f"{remaining} connections did not close gracefully")
+                self._connections.clear()
+                self._connection_count = 0
+            else:
+                logger.info("All connections closed successfully")
     
     async def _close_connection_gracefully(self, ws: WebSocket) -> None:
         try:
@@ -511,14 +547,15 @@ class WebSocketServer:
         except Exception as e:
             logger.debug(f"Error closing connection: {e}")
         finally:
-            self._remove_connection(ws)
+            await self._remove_connection(ws)
     
     async def _cleanup_resources(self) -> None:
         try:
-            await self._cleanup_orphaned_connections()
+            await self._cleanup_dead_connections()
             
-            self._connections.clear()
-            self._connection_count = 0
+            async with self._connections_lock:
+                self._connections.clear()
+                self._connection_count = 0
             
             if hasattr(CertificateManager, 'cleanup_temp_files'):
                 CertificateManager.cleanup_temp_files()
@@ -561,7 +598,7 @@ class WebSocketServer:
         connection_added = False
         
         try:
-            self._add_connection(ws_wrapper)
+            await self._add_connection(ws_wrapper)
             connection_added = True
             
             await self.dispatcher.dispatch_connect(ws_wrapper)
@@ -589,17 +626,22 @@ class WebSocketServer:
         finally:
             cleanup_error = None
             
-            if connection_added and ws_wrapper in self._connections:
-                reason = "Server shutdown" if self._shutdown_event.is_set() else "Connection closed"
-                try:
-                    await self.dispatcher.dispatch_disconnect(ws_wrapper, reason)
-                except Exception as e:
-                    cleanup_error = e
-                    logger.debug(f"Error in disconnect handler: {str(e)}")
+            # Check if connection is still in set before dispatch_disconnect
+            if connection_added:
+                async with self._connections_lock:
+                    in_connections = ws_wrapper in self._connections
+                
+                if in_connections:
+                    reason = "Server shutdown" if self._shutdown_event.is_set() else "Connection closed"
+                    try:
+                        await self.dispatcher.dispatch_disconnect(ws_wrapper, reason)
+                    except Exception as e:
+                        cleanup_error = e
+                        logger.debug(f"Error in disconnect handler: {str(e)}")
             
             if connection_added:
                 try:
-                    self._remove_connection(ws_wrapper)
+                    await self._remove_connection(ws_wrapper)
                 except Exception as e:
                     if cleanup_error is None:
                         cleanup_error = e

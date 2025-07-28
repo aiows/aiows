@@ -26,7 +26,7 @@ class TestFrameworkImports(unittest.TestCase):
     
     def test_version_consistency(self):
         """Test version is consistent across the framework"""
-        self.assertEqual(aiows.__version__, "0.1.0")
+        self.assertEqual(aiows.__version__, "0.1.1")
     
     def test_all_components_importable(self):
         """Test all components in __all__ can be imported"""
