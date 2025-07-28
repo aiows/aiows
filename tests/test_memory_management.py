@@ -7,7 +7,7 @@ import time
 from memory_profiler import profile
 from unittest.mock import AsyncMock, Mock
 
-from aiows.dispatcher import MessageDispatcher, _MiddlewareChainExecutor
+from aiows.dispatcher import MessageDispatcher
 from aiows.router import Router
 from aiows.websocket import WebSocket
 from aiows.middleware.base import BaseMiddleware
@@ -246,20 +246,35 @@ class TestMemoryManagement:
         assert execution_time < 30, f"Stress test took too long: {execution_time:.2f} seconds"
     
     @pytest.mark.asyncio
-    async def test_memory_cleanup_after_executor_destruction(self, router):
-        dispatcher = MessageDispatcher(router)
+    async def test_memory_cleanup_simplified_execution(self, dispatcher, mock_websocket):
+        """Test that simplified middleware execution doesn't create memory leaks"""
+        initial_memory = self.get_memory_usage()
+        gc.collect()
+        
         middleware = MockMiddleware("cleanup_test")
         dispatcher.add_middleware(middleware)
         
-        executor = _MiddlewareChainExecutor([middleware], dispatcher)
+        # Execute many middleware chains to test for memory leaks
+        for i in range(200):
+            await dispatcher.dispatch_connect(mock_websocket)
+            await dispatcher.dispatch_message(mock_websocket, {
+                'type': 'chat',
+                'text': f'cleanup test {i}',
+                'user_id': i + 3000
+            })
+            await dispatcher.dispatch_disconnect(mock_websocket, f"cleanup test {i}")
+            
+            if i % 50 == 0:
+                gc.collect()
         
-        assert executor.middleware_list == [middleware]
-        assert executor.dispatcher == dispatcher
+        gc.collect()
+        final_memory = self.get_memory_usage()
+        memory_growth = final_memory - initial_memory
         
-        executor.cleanup()
+        print(f"Simplified execution memory growth: {memory_growth:.2f} MB")
         
-        assert len(executor.middleware_list) == 0
-        assert executor.dispatcher is None
+        # With simplified execution, memory growth should be minimal
+        assert memory_growth < 8, f"Memory leak in simplified execution: {memory_growth:.2f} MB growth"
     
     @pytest.mark.asyncio
     async def test_performance_comparison(self, dispatcher, mock_websocket):

@@ -3,6 +3,7 @@ Type definitions for aiows
 """
 
 from datetime import datetime
+from enum import Enum
 from typing import Literal, Tuple
 from pydantic import BaseModel, Field, field_validator
 
@@ -10,6 +11,13 @@ from ..validators import (
     validate_safe_text, validate_username, validate_room_id, 
     validate_game_action, validate_user_id, validate_coordinates
 )
+
+
+class EventType(Enum):
+    """Enum for WebSocket event types"""
+    CONNECT = "connect"
+    DISCONNECT = "disconnect"
+    MESSAGE = "message"
 
 
 class BaseMessage(BaseModel):

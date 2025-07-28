@@ -9,7 +9,7 @@ import threading
 import time
 from .router import Router
 from .websocket import WebSocket  
-from .types import BaseMessage, ChatMessage, JoinRoomMessage, GameActionMessage
+from .types import BaseMessage, ChatMessage, JoinRoomMessage, GameActionMessage, EventType
 from .exceptions import MessageValidationError, MiddlewareError, ConnectionError, AiowsException
 from .middleware.base import BaseMiddleware
 from typing import List, Callable, Any, Optional
@@ -141,7 +141,7 @@ class MessageDispatcher:
             dispatcher_error_metrics.increment('validation')
             self._log_error_with_context(exception, f"middleware_{event_type}", websocket, 
                                        {'middleware_name': middleware_name})
-            if event_type == "message":
+            if event_type == EventType.MESSAGE.value:
                 return False
             return True
             
@@ -271,145 +271,77 @@ class MessageDispatcher:
         else:
             self.logger.warning(f"No handler found for message type: {message_type}")
 
+    async def _execute_middleware_chain(self, event_type: EventType, middleware_list: List[BaseMiddleware], *args) -> None:
+        """Execute middleware chain iteratively without complex executor objects"""
+        middleware_index = 0
+        
+        async def next_handler(*handler_args) -> None:
+            nonlocal middleware_index
+            
+            # Use provided args if handler didn't modify them
+            effective_args = handler_args if handler_args else args
+            
+            if middleware_index < len(middleware_list):
+                current_middleware = middleware_list[middleware_index]
+                middleware_index += 1
+                
+                try:
+                    if event_type == EventType.CONNECT:
+                        await current_middleware.on_connect(next_handler, *effective_args)
+                    elif event_type == EventType.DISCONNECT:
+                        await current_middleware.on_disconnect(next_handler, *effective_args)
+                    elif event_type == EventType.MESSAGE:
+                        await current_middleware.on_message(next_handler, *effective_args)
+                    else:
+                        raise ValueError(f"Unknown event type: {event_type}")
+                        
+                except Exception as e:
+                    websocket = effective_args[0] if effective_args and hasattr(effective_args[0], 'context') else None
+                    
+                    should_continue = await self._handle_middleware_exception(
+                        e, current_middleware, event_type.value, websocket
+                    )
+                    
+                    if not should_continue:
+                        if event_type == EventType.CONNECT and websocket and not websocket.closed:
+                            try:
+                                await websocket.close(code=1011, reason="Server error")
+                            except Exception:
+                                pass
+                        return
+                    
+                    # Continue with next middleware on error if should_continue is True
+                    # Note: middleware_index is already incremented, so we continue with next middleware
+                    await next_handler(*effective_args)
+            else:
+                # Execute final handlers when middleware chain is complete
+                if event_type == EventType.CONNECT:
+                    await self._execute_connect_chain(*effective_args)
+                elif event_type == EventType.DISCONNECT:
+                    await self._execute_disconnect_chain(*effective_args)
+                elif event_type == EventType.MESSAGE:
+                    await self._execute_message_chain(*effective_args)
+        
+        await next_handler(*args)
+
     async def dispatch_connect(self, websocket: WebSocket) -> None:
         with self._middleware_lock:
             middleware_copy = self._middleware.copy()
         
-        executor = _MiddlewareChainExecutor(middleware_copy, self)
-        await executor.execute_connect_chain(websocket)
+        await self._execute_middleware_chain(EventType.CONNECT, middleware_copy, websocket)
 
     async def dispatch_disconnect(self, websocket: WebSocket, reason: str) -> None:
         with self._middleware_lock:
             middleware_copy = self._middleware.copy()
         
-        executor = _MiddlewareChainExecutor(middleware_copy, self)
-        await executor.execute_disconnect_chain(websocket, reason)
+        await self._execute_middleware_chain(EventType.DISCONNECT, middleware_copy, websocket, reason)
 
     async def dispatch_message(self, websocket: WebSocket, message_data: dict) -> None:
         with self._middleware_lock:
             middleware_copy = self._middleware.copy()
         
-        executor = _MiddlewareChainExecutor(middleware_copy, self)
-        await executor.execute_message_chain(websocket, message_data)
+        await self._execute_middleware_chain(EventType.MESSAGE, middleware_copy, websocket, message_data)
     
     @property
     def error_metrics(self) -> DispatcherErrorMetrics:
         return dispatcher_error_metrics
-
-
-class _MiddlewareChainExecutor:
-    def __init__(self, middleware_list: List[BaseMiddleware], dispatcher: MessageDispatcher):
-        self.middleware_list = middleware_list
-        self.dispatcher = dispatcher
-    
-    def cleanup(self) -> None:
-        self.middleware_list.clear()
-        self.dispatcher = None
-    
-    async def execute_connect_chain(self, websocket: WebSocket) -> None:
-        try:
-            await self._execute_chain_iterative("connect", websocket)
-        finally:
-            self.cleanup()
-    
-    async def execute_disconnect_chain(self, websocket: WebSocket, reason: str) -> None:
-        try:
-            await self._execute_chain_iterative("disconnect", websocket, reason)
-        finally:
-            self.cleanup()
-    
-    async def execute_message_chain(self, websocket: WebSocket, message_data: dict) -> None:
-        try:
-            await self._execute_chain_iterative("message", websocket, message_data)
-        finally:
-            self.cleanup()
-    
-    async def _execute_chain_iterative(self, event_type: str, *args) -> None:
-        if not self.middleware_list:
-            await self._execute_final_handler(event_type, *args)
-            return
-        
-        context = _MiddlewareExecutionContext(
-            self.middleware_list,
-            self.dispatcher,
-            event_type,
-            args
-        )
-        
-        await context.execute_from_index(0)
-    
-    async def _execute_final_handler(self, event_type: str, *args) -> None:
-        if event_type == "connect":
-            await self.dispatcher._execute_connect_chain(*args)
-        elif event_type == "disconnect":
-            await self.dispatcher._execute_disconnect_chain(*args)
-        elif event_type == "message":
-            await self.dispatcher._execute_message_chain(*args)
-        else:
-            raise ValueError(f"Unknown event type: {event_type}")
-
-
-class _MiddlewareExecutionContext:
-    def __init__(self, middleware_list: List[BaseMiddleware], dispatcher: MessageDispatcher, event_type: str, args: tuple):
-        self.middleware_list = middleware_list
-        self.dispatcher = dispatcher
-        self.event_type = event_type
-        self.args = args
-    
-    async def execute_from_index(self, index: int) -> None:
-        if index >= len(self.middleware_list):
-            await self._execute_final_handler()
-            return
-        
-        current_middleware = self.middleware_list[index]
-        
-        try:
-            next_handler = _NextHandler(self, index + 1)
-            
-            if self.event_type == "connect":
-                await current_middleware.on_connect(next_handler.call, *self.args)
-            elif self.event_type == "disconnect":
-                await current_middleware.on_disconnect(next_handler.call, *self.args)
-            elif self.event_type == "message":
-                await current_middleware.on_message(next_handler.call, *self.args)
-            else:
-                raise ValueError(f"Unknown event type: {self.event_type}")
-                
-        except Exception as e:
-            websocket = self.args[0] if self.args and hasattr(self.args[0], 'context') else None
-            
-            should_continue = await self.dispatcher._handle_middleware_exception(
-                e, current_middleware, self.event_type, websocket
-            )
-            
-            if not should_continue:
-                if self.event_type == "connect" and websocket and not websocket.closed:
-                    try:
-                        await websocket.close(code=1011, reason="Server error")
-                    except Exception:
-                        pass
-                return
-            
-            await self.execute_from_index(index + 1)
-    
-    async def _execute_final_handler(self) -> None:
-        if self.event_type == "connect":
-            await self.dispatcher._execute_connect_chain(*self.args)
-        elif self.event_type == "disconnect":
-            await self.dispatcher._execute_disconnect_chain(*self.args)
-        elif self.event_type == "message":
-            await self.dispatcher._execute_message_chain(*self.args)
-        else:
-            raise ValueError(f"Unknown event type: {self.event_type}")
-
-
-class _NextHandler:
-    def __init__(self, context: _MiddlewareExecutionContext, next_index: int):
-        self.context = context
-        self.next_index = next_index
-    
-    async def call(self, *args) -> None:
-        if args:
-            self.context.args = args
-        
-        await self.context.execute_from_index(self.next_index)
