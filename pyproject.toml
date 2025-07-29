@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aiows"
-version = "0.1.1"
+version = "0.1.2"
 description = "Modern WebSocket framework inspired by aiogram"
 authors = [{name = "aiows contributors"}]
 license = {text = "MIT"}
