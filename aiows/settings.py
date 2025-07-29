@@ -1,22 +1,15 @@
-"""
-Settings and configuration profiles for aiows framework
-"""
-
 import os
 import secrets
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from .config import (
     BaseConfig, ConfigValue, ConfigValidationError,
-    positive_int, positive_number, non_negative_number, valid_port, 
-    valid_host, non_empty_string, valid_log_level, min_length, 
-    in_range, in_choices
+    positive_int, positive_number, valid_port, 
+    valid_host, valid_log_level, min_length, 
 )
 
 
 class ServerConfig(BaseConfig):
-    """Server configuration settings"""
-    
     host = ConfigValue(
         default="localhost",
         validator=valid_host,
@@ -97,7 +90,7 @@ class ServerConfig(BaseConfig):
     )
     
     max_message_size = ConfigValue(
-        default=1048576,  # 1MB
+        default=1048576,
         validator=positive_int,
         type_cast=int,
         description="Maximum message size in bytes"
@@ -119,8 +112,6 @@ class ServerConfig(BaseConfig):
 
 
 class RateLimitConfig(BaseConfig):
-    """Rate limiting configuration settings"""
-    
     enabled = ConfigValue(
         default=True,
         type_cast=bool,
@@ -157,8 +148,6 @@ class RateLimitConfig(BaseConfig):
 
 
 class ConnectionLimiterConfig(BaseConfig):
-    """Connection limiting configuration settings"""
-    
     enabled = ConfigValue(
         default=True,
         type_cast=bool,
@@ -208,8 +197,6 @@ class ConnectionLimiterConfig(BaseConfig):
 
 
 class AuthConfig(BaseConfig):
-    """Authentication configuration settings"""
-    
     enabled = ConfigValue(
         default=False,
         type_cast=bool,
@@ -281,8 +268,6 @@ class AuthConfig(BaseConfig):
 
 
 class LoggingConfig(BaseConfig):
-    """Logging configuration settings"""
-    
     enabled = ConfigValue(
         default=True,
         type_cast=bool,
@@ -349,17 +334,15 @@ class LoggingConfig(BaseConfig):
 
 
 class SecurityConfig(BaseConfig):
-    """Security configuration settings"""
-    
     max_message_size = ConfigValue(
-        default=1048576,  # 1MB
+        default=1048576,
         validator=positive_int,
         type_cast=int,
         description="Maximum message size in bytes"
     )
     
     max_frame_size = ConfigValue(
-        default=1048576,  # 1MB
+        default=1048576,
         validator=positive_int,
         type_cast=int,
         description="Maximum WebSocket frame size in bytes"
@@ -405,9 +388,69 @@ class SecurityConfig(BaseConfig):
     )
 
 
-class AiowsSettings:
-    """Main settings class that combines all configuration sections"""
+class BackpressureConfig(BaseConfig):
+    enabled = ConfigValue(
+        default=True,
+        type_cast=bool,
+        description="Whether backpressure protection is enabled"
+    )
     
+    send_queue_max_size = ConfigValue(
+        default=100,
+        validator=positive_int,
+        type_cast=int,
+        description="Maximum size of per-connection send queue"
+    )
+    
+    send_queue_overflow_strategy = ConfigValue(
+        default="drop_oldest",
+        type_cast=str,
+        description="Strategy for queue overflow: 'drop_oldest', 'drop_newest', 'reject'"
+    )
+    
+    connection_health_check_interval = ConfigValue(
+        default=30.0,
+        validator=positive_number,
+        type_cast=float,
+        description="Interval in seconds for connection health monitoring"
+    )
+    
+    slow_client_threshold = ConfigValue(
+        default=80,
+        validator=positive_int,
+        type_cast=int,
+        description="Queue size threshold to consider client slow (% of max_size)"
+    )
+    
+    slow_client_timeout = ConfigValue(
+        default=60.0,
+        validator=positive_number,
+        type_cast=float,
+        description="Time in seconds to wait before dropping slow client"
+    )
+    
+    max_response_time_ms = ConfigValue(
+        default=5000,
+        validator=positive_int,
+        type_cast=int,
+        description="Maximum response time in milliseconds before considering client slow"
+    )
+    
+    enable_send_metrics = ConfigValue(
+        default=True,
+        type_cast=bool,
+        description="Whether to collect detailed send queue metrics"
+    )
+    
+    metrics_aggregation_window = ConfigValue(
+        default=300.0,
+        validator=positive_number,
+        type_cast=float,
+        description="Window in seconds for metrics aggregation"
+    )
+
+
+class AiowsSettings:
     def __init__(self, profile: str = "development"):
         self.profile = profile
         self._configs: Dict[str, BaseConfig] = {}
@@ -418,6 +461,7 @@ class AiowsSettings:
         self.auth = AuthConfig()
         self.logging = LoggingConfig()
         self.security = SecurityConfig()
+        self.backpressure = BackpressureConfig()
         
         self._configs = {
             'server': self.server,
@@ -425,7 +469,8 @@ class AiowsSettings:
             'connection_limiter': self.connection_limiter,
             'auth': self.auth,
             'logging': self.logging,
-            'security': self.security
+            'security': self.security,
+            'backpressure': self.backpressure
         }
         
         self._apply_profile(profile)
@@ -470,7 +515,13 @@ class AiowsSettings:
         if not self.auth.secret_key:
             self.auth.secret_key = secrets.token_urlsafe(64)
         self.auth.enable_ip_validation = True
-        self.auth.session_timeout = 1800  # 30 minutes
+        self.auth.session_timeout = 1800
+        
+        self.backpressure.enabled = True
+        self.backpressure.send_queue_max_size = 50
+        self.backpressure.slow_client_threshold = 70
+        self.backpressure.slow_client_timeout = 30.0
+        self.backpressure.max_response_time_ms = 3000
     
     def _apply_development_profile(self) -> None:
         self.server.is_production = False
@@ -504,7 +555,13 @@ class AiowsSettings:
         if not self.auth.secret_key and self.auth.enabled:
             self.auth.secret_key = "development_key_change_in_production_" + secrets.token_urlsafe(32)
         self.auth.enable_ip_validation = False
-        self.auth.session_timeout = 7200  # 2 hours
+        self.auth.session_timeout = 7200
+        
+        self.backpressure.enabled = True
+        self.backpressure.send_queue_max_size = 200
+        self.backpressure.slow_client_threshold = 85
+        self.backpressure.slow_client_timeout = 120.0
+        self.backpressure.max_response_time_ms = 10000
     
     def _apply_testing_profile(self) -> None:
         self.server.is_production = False
@@ -550,7 +607,14 @@ class AiowsSettings:
         self.auth.token_ttl = 60
         self.auth.auth_timeout = 5
         self.auth.max_tickets = 1000
-        self.auth.session_timeout = 300  # 5 minutes
+        self.auth.session_timeout = 300
+        
+        self.backpressure.enabled = True
+        self.backpressure.send_queue_max_size = 10
+        self.backpressure.slow_client_threshold = 80
+        self.backpressure.slow_client_timeout = 5.0
+        self.backpressure.max_response_time_ms = 1000
+        self.backpressure.connection_health_check_interval = 1.0
     
     def _post_configuration_validation(self) -> None:
         if self.server.is_production and self.server.require_ssl_in_production:

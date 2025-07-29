@@ -4,7 +4,6 @@ import json
 import threading
 import time
 import socket
-import weakref
 from unittest.mock import Mock, AsyncMock, patch
 from typing import Dict, Any
 
@@ -366,7 +365,7 @@ class TestServerConnectionManagement:
         assert server.port == 8000
         assert server.router is not None
         assert server.dispatcher is not None
-        assert isinstance(server._connections, weakref.WeakSet)
+        assert isinstance(server._connections, set)
 
 class TestFullChatFlow:
     

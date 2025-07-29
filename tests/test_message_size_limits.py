@@ -1,5 +1,4 @@
 import pytest
-import asyncio
 import json
 from unittest.mock import AsyncMock
 import logging
@@ -8,6 +7,7 @@ from aiows.websocket import WebSocket
 from aiows.exceptions import MessageSizeError, ConnectionError
 
 
+@pytest.mark.asyncio
 class TestMessageSizeLimits:
 
     @pytest.fixture

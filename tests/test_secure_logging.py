@@ -5,7 +5,6 @@ Tests for secure logging middleware functionality
 import asyncio
 import json
 import logging
-import time
 import uuid
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch

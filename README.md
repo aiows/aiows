@@ -165,7 +165,6 @@ Check `/examples` for:
 - [ ] Simplify middleware execution system
 - [ ] Fix connection management race conditions  
 - [ ] Add rooms/channels functionality
-- [ ] Implement message filters
 - [ ] Optimize WebSocket performance locks
 - [ ] Add connection pooling support
 - [ ] Improve error handling consistency

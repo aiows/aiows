@@ -1,6 +1,6 @@
 import pytest
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 from aiows import (
     BaseMessage, 
@@ -9,9 +9,6 @@ from aiows import (
     GameActionMessage,
     Router,
     WebSocketServer,
-    WebSocket,
-    AiowsException,
-    ConnectionError,
     MessageValidationError
 )
 from aiows.dispatcher import MessageDispatcher
@@ -222,3 +219,30 @@ class TestMessageDispatcher:
         
         with pytest.raises(MessageValidationError):
             await dispatcher.dispatch_message(mock_websocket, message_data) 
+
+
+class TestFiltersModule:
+    
+    def test_filters_import_without_error(self):
+        try:
+            import aiows.filters
+            assert aiows.filters is not None
+        except ImportError as e:
+            pytest.fail(f"Failed to import aiows.filters: {e}")
+    
+    def test_filters_module_has_docstring(self):
+        import aiows.filters
+        
+        assert aiows.filters.__doc__ is not None
+        assert len(aiows.filters.__doc__.strip()) > 0
+        
+        docstring = aiows.filters.__doc__.lower()
+        assert "todo" in docstring or "placeholder" in docstring
+    
+    def test_filters_module_is_empty_placeholder(self):
+        import aiows.filters
+        
+        public_attrs = [attr for attr in dir(aiows.filters) if not attr.startswith('_')]
+        
+        expected_attrs = []
+        assert public_attrs == expected_attrs, f"Expected empty placeholder, but found: {public_attrs}" 

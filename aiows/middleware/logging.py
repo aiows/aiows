@@ -8,8 +8,8 @@ import logging
 import uuid
 import re
 import hashlib
-from collections import defaultdict, deque
-from typing import Any, Awaitable, Callable, Optional, Dict, Set, Union, TYPE_CHECKING
+from collections import deque
+from typing import Any, Awaitable, Callable, Optional, Dict, Union, TYPE_CHECKING
 from datetime import datetime, timedelta, timezone
 from .base import BaseMiddleware
 from ..websocket import WebSocket

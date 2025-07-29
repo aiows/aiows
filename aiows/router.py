@@ -3,7 +3,6 @@ Router implementation for WebSocket events
 """
 
 from typing import List, Callable, Optional, Any
-from functools import wraps
 from .middleware.base import BaseMiddleware
 
 

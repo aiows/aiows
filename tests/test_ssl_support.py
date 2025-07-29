@@ -8,8 +8,7 @@ import ssl
 import tempfile
 import warnings
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from typing import Dict
+from unittest.mock import Mock, AsyncMock, patch
 
 from aiows.server import WebSocketServer, CertificateManager
 

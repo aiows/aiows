@@ -2,13 +2,32 @@
 Connection limiting middleware for aiows framework
 """
 
+from __future__ import annotations
+
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, TYPE_CHECKING
+from collections import deque
+from typing import Any, Awaitable, Callable, TYPE_CHECKING
 from .base import BaseMiddleware
 from ..websocket import WebSocket
 
 if TYPE_CHECKING:
     from ..settings import ConnectionLimiterConfig
+
+# WebSocket close codes for connection limiting
+class ConnectionLimitCodes:
+    """WebSocket close codes used by connection limiter middleware"""
+    CONNECTION_LIMIT_EXCEEDED = 4008
+    RATE_LIMIT_EXCEEDED = 4008
+
+
+# Default configuration values
+class ConnectionLimitDefaults:
+    """Default configuration values for connection limiter middleware"""
+    MAX_CONNECTIONS_PER_IP = 10
+    MAX_CONNECTIONS_PER_MINUTE = 30
+    SLIDING_WINDOW_SIZE = 60  # seconds
+    CLEANUP_INTERVAL = 300  # seconds
+    MAX_CLEANUP_THRESHOLD = 60  # seconds
 
 
 class ConnectionLimiterMiddleware(BaseMiddleware):
@@ -20,38 +39,42 @@ class ConnectionLimiterMiddleware(BaseMiddleware):
     - Rate limits new connection attempts using sliding window
     - Supports whitelist for trusted IPs
     - Automatic cleanup of expired tracking data
+    - Optimized with deque for O(1) timestamp operations
     """
     
     def __init__(
         self,
-        max_connections_per_ip: Optional[int] = None,
-        max_connections_per_minute: Optional[int] = None,
-        sliding_window_size: Optional[int] = None,
-        whitelist_ips: Optional[List[str]] = None,
-        cleanup_interval: Optional[int] = None,
-        config: Optional['ConnectionLimiterConfig'] = None
+        max_connections_per_ip: int | None = None,
+        max_connections_per_minute: int | None = None,
+        sliding_window_size: int | None = None,
+        whitelist_ips: list[str] | None = None,
+        cleanup_interval: int | None = None,
+        config: ConnectionLimiterConfig | None = None
     ):
         # Load configuration
         if config is not None:
             self.max_connections_per_ip = config.max_connections_per_ip
             self.max_connections_per_minute = config.max_connections_per_minute
             self.sliding_window_size = config.sliding_window_size
-            self.whitelist_ips: Set[str] = set(config.whitelist_ips or [])
+            self.whitelist_ips: set[str] = set(config.whitelist_ips or [])
             self.cleanup_interval = config.cleanup_interval
         else:
             # Use provided parameters or defaults for backward compatibility
-            self.max_connections_per_ip = max_connections_per_ip or 10
-            self.max_connections_per_minute = max_connections_per_minute or 30
-            self.sliding_window_size = sliding_window_size or 60
-            self.whitelist_ips: Set[str] = set(whitelist_ips or [])
-            self.cleanup_interval = cleanup_interval or 300
+            self.max_connections_per_ip = max_connections_per_ip or ConnectionLimitDefaults.MAX_CONNECTIONS_PER_IP
+            self.max_connections_per_minute = max_connections_per_minute or ConnectionLimitDefaults.MAX_CONNECTIONS_PER_MINUTE
+            self.sliding_window_size = sliding_window_size or ConnectionLimitDefaults.SLIDING_WINDOW_SIZE
+            self.whitelist_ips: set[str] = set(whitelist_ips or [])
+            self.cleanup_interval = cleanup_interval or ConnectionLimitDefaults.CLEANUP_INTERVAL
         
-        self.active_connections: Dict[str, Set[int]] = {}
-        self.connection_attempts: Dict[str, List[float]] = {}
-        self.last_cleanup = time.time()
+        self.active_connections: dict[str, set[int]] = {}
+        # Optimized: Use deque instead of list for O(1) operations  
+        self.connection_attempts: dict[str, deque[float]] = {}
+        self.last_cleanup: float = time.time()
+        # Trigger cleanup less frequently for better performance
+        self._cleanup_threshold: int = min(self.cleanup_interval // 2, ConnectionLimitDefaults.MAX_CLEANUP_THRESHOLD)
     
     @classmethod
-    def from_config(cls, config: 'ConnectionLimiterConfig') -> 'ConnectionLimiterMiddleware':
+    def from_config(cls, config: ConnectionLimiterConfig) -> ConnectionLimiterMiddleware:
         """Create ConnectionLimiterMiddleware instance from ConnectionLimiterConfig
         
         Args:
@@ -62,7 +85,7 @@ class ConnectionLimiterMiddleware(BaseMiddleware):
         """
         return cls(config=config)
     
-    def _get_client_ip(self, websocket: WebSocket) -> Optional[str]:
+    def _get_client_ip(self, websocket: WebSocket) -> str | None:
         try:
             if hasattr(websocket._websocket, 'remote_address'):
                 remote = websocket._websocket.remote_address
@@ -86,23 +109,41 @@ class ConnectionLimiterMiddleware(BaseMiddleware):
     def _is_whitelisted(self, ip: str) -> bool:
         return ip in self.whitelist_ips
     
+    def _cleanup_expired_timestamps(self, ip: str, cutoff_time: float) -> None:
+        """Efficiently remove expired timestamps from deque using O(1) popleft operations"""
+        if ip not in self.connection_attempts:
+            return
+            
+        attempts = self.connection_attempts[ip]
+        
+        # Handle case where tests might set lists instead of deques
+        if isinstance(attempts, list):
+            # Convert list to deque for compatibility
+            attempts = deque(attempts)
+            self.connection_attempts[ip] = attempts
+        
+        # Remove expired timestamps from left side of deque - O(1) per removal
+        while attempts and attempts[0] <= cutoff_time:
+            attempts.popleft()
+        
+        # Remove empty deques to save memory
+        if not attempts:
+            del self.connection_attempts[ip]
+    
     def _cleanup_expired_data(self) -> None:
         current_time = time.time()
         
-        if current_time - self.last_cleanup < self.cleanup_interval:
+        # Only cleanup when necessary - reduced frequency for better performance
+        if current_time - self.last_cleanup < self._cleanup_threshold:
             return
         
         cutoff_time = current_time - self.sliding_window_size
-        for ip in list(self.connection_attempts.keys()):
-            attempts = self.connection_attempts[ip]
-            self.connection_attempts[ip] = [
-                timestamp for timestamp in attempts 
-                if timestamp > cutoff_time
-            ]
-            
-            if not self.connection_attempts[ip]:
-                del self.connection_attempts[ip]
         
+        # Cleanup expired timestamps for all IPs
+        for ip in list(self.connection_attempts.keys()):
+            self._cleanup_expired_timestamps(ip, cutoff_time)
+        
+        # Cleanup empty active connections
         for ip in list(self.active_connections.keys()):
             if not self.active_connections[ip]:
                 del self.active_connections[ip]
@@ -120,24 +161,22 @@ class ConnectionLimiterMiddleware(BaseMiddleware):
         cutoff_time = current_time - self.sliding_window_size
         
         if ip not in self.connection_attempts:
-            self.connection_attempts[ip] = []
+            self.connection_attempts[ip] = deque()
         
-        attempts = self.connection_attempts[ip]
+        # Optimized: Clean expired timestamps only for this IP using O(1) operations
+        self._cleanup_expired_timestamps(ip, cutoff_time)
         
-        self.connection_attempts[ip] = [
-            timestamp for timestamp in attempts 
-            if timestamp > cutoff_time
-        ]
-        
-        recent_attempts = len(self.connection_attempts[ip])
+        # Check if deque still exists after cleanup (might have been deleted if empty)
+        recent_attempts = len(self.connection_attempts.get(ip, deque()))
         return recent_attempts < self.max_connections_per_minute
     
     def _record_connection_attempt(self, ip: str) -> None:
         current_time = time.time()
         
         if ip not in self.connection_attempts:
-            self.connection_attempts[ip] = []
+            self.connection_attempts[ip] = deque()
         
+        # O(1) operation
         self.connection_attempts[ip].append(current_time)
     
     def _add_active_connection(self, ip: str, connection_id: int) -> None:
@@ -156,14 +195,21 @@ class ConnectionLimiterMiddleware(BaseMiddleware):
     def _get_connection_id(self, websocket: WebSocket) -> int:
         return id(websocket)
     
-    def _get_stats_for_ip(self, ip: str) -> Dict[str, Any]:
+    def _get_stats_for_ip(self, ip: str) -> dict[str, Any]:
         current_time = time.time()
         cutoff_time = current_time - self.sliding_window_size
         
         recent_attempts = 0
         if ip in self.connection_attempts:
+            attempts = self.connection_attempts[ip]
+            # Handle case where tests might set lists instead of deques
+            if isinstance(attempts, list):
+                attempts = deque(attempts)
+                self.connection_attempts[ip] = attempts
+            
+            # Optimized: Count only valid timestamps in deque
             recent_attempts = len([
-                timestamp for timestamp in self.connection_attempts[ip]
+                timestamp for timestamp in attempts
                 if timestamp > cutoff_time
             ])
         
@@ -211,7 +257,7 @@ class ConnectionLimiterMiddleware(BaseMiddleware):
         if not self._check_rate_limit(client_ip):
             stats = self._get_stats_for_ip(client_ip)
             await websocket.close(
-                code=4008,
+                code=ConnectionLimitCodes.RATE_LIMIT_EXCEEDED,
                 reason=f"Connection rate limit exceeded. Max {self.max_connections_per_minute} connections per {self.sliding_window_size}s"
             )
             return
@@ -219,7 +265,7 @@ class ConnectionLimiterMiddleware(BaseMiddleware):
         if not self._check_connection_limit(client_ip):
             stats = self._get_stats_for_ip(client_ip)
             await websocket.close(
-                code=4008,
+                code=ConnectionLimitCodes.CONNECTION_LIMIT_EXCEEDED,
                 reason=f"Too many concurrent connections. Max {self.max_connections_per_ip} connections per IP"
             )
             return
@@ -253,7 +299,7 @@ class ConnectionLimiterMiddleware(BaseMiddleware):
         
         return await handler(*args, **kwargs)
     
-    def get_global_stats(self) -> Dict[str, Any]:
+    def get_global_stats(self) -> dict[str, Any]:
         total_active_connections = sum(
             len(connections) for connections in self.active_connections.values()
         )
@@ -264,7 +310,13 @@ class ConnectionLimiterMiddleware(BaseMiddleware):
         cutoff_time = current_time - self.sliding_window_size
         total_recent_attempts = 0
         
-        for attempts in self.connection_attempts.values():
+        # Optimized: Count valid timestamps in deques
+        for ip, attempts in list(self.connection_attempts.items()):
+            # Handle case where tests might set lists instead of deques
+            if isinstance(attempts, list):
+                attempts = deque(attempts)
+                self.connection_attempts[ip] = attempts
+            
             total_recent_attempts += len([
                 timestamp for timestamp in attempts
                 if timestamp > cutoff_time
@@ -286,7 +338,7 @@ class ConnectionLimiterMiddleware(BaseMiddleware):
     def remove_from_whitelist(self, ip: str) -> None:
         self.whitelist_ips.discard(ip)
     
-    def is_ip_blocked(self, ip: str) -> Dict[str, Any]:
+    def is_ip_blocked(self, ip: str) -> dict[str, Any]:
         if self._is_whitelisted(ip):
             return {
                 'blocked': False,

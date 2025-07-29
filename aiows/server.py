@@ -12,9 +12,8 @@ import subprocess
 import tempfile
 import time
 import warnings
-import weakref
 import websockets
-from typing import Dict, List, Optional, Union, TYPE_CHECKING
+from typing import Dict, List, Optional, Union, TYPE_CHECKING, Set, Any
 from .router import Router
 from .dispatcher import MessageDispatcher
 from .websocket import WebSocket
@@ -33,7 +32,6 @@ class CertificateManager:
     
     @classmethod
     def cleanup_temp_files(cls):
-        """Clean up temporary certificate files"""
         for file_path in cls._temp_files:
             try:
                 if os.path.exists(file_path):
@@ -49,11 +47,6 @@ class CertificateManager:
                                  org_name: str = "aiows Development",
                                  country: str = "US",
                                  days: int = 365) -> tuple[str, str]:
-        """Generate self-signed certificate using OpenSSL
-        
-        Returns:
-            Tuple of (cert_file_path, key_file_path)
-        """
         cert_file = tempfile.NamedTemporaryFile(suffix='.pem', delete=False)
         key_file = tempfile.NamedTemporaryFile(suffix='.key', delete=False)
         cert_file.close()
@@ -88,7 +81,6 @@ class CertificateManager:
     
     @classmethod
     def create_secure_ssl_context(cls, cert_file: str, key_file: str) -> ssl.SSLContext:
-        """Create securely configured SSL context"""
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         
         context.load_cert_chain(cert_file, key_file)
@@ -102,7 +94,6 @@ class CertificateManager:
     
     @classmethod
     def validate_certificate(cls, cert_file: str) -> Dict[str, Union[str, bool]]:
-        """Validate certificate file and return info"""
         try:
             cmd = ['openssl', 'x509', '-in', cert_file, '-text', '-noout']
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -133,32 +124,19 @@ class WebSocketServer:
                  require_ssl_in_production: bool = True,
                  cert_config: Optional[Dict[str, str]] = None,
                  settings: Optional['AiowsSettings'] = None):
-        """Initialize WebSocket server
-        
-        Args:
-            ssl_context: SSL context for secure connections (None = no SSL)
-            is_production: Whether running in production environment
-            require_ssl_in_production: Whether to require SSL in production
-            cert_config: Certificate configuration (common_name, org_name, country)
-            settings: AiowsSettings instance for configuration (overrides other params)
-        """
-        # Import here to avoid circular imports
         if settings is None:
             try:
                 from .settings import create_settings
                 settings = create_settings()
             except ImportError:
-                # Fallback to defaults if settings not available
                 settings = None
         
-        # Set server configuration from settings or parameters
         if settings is not None:
             self.host: str = settings.server.host
             self.port: int = settings.server.port
             self._cleanup_interval: float = settings.server.cleanup_interval
             self._shutdown_timeout: float = settings.server.shutdown_timeout
             
-            # Override parameters with settings if provided
             if ssl_context is None and hasattr(settings.server, 'ssl_context'):
                 ssl_context = getattr(settings.server, 'ssl_context', None)
             
@@ -173,7 +151,6 @@ class WebSocketServer:
                     'days': settings.server.ssl_cert_days
                 }
         else:
-            # Fallback to hardcoded defaults for backward compatibility
             self.host: str = "localhost"
             self.port: int = 8000
             self._cleanup_interval: float = 30.0
@@ -182,9 +159,10 @@ class WebSocketServer:
         self.router: Router = Router()
         self.dispatcher: MessageDispatcher = MessageDispatcher(self.router)
         
-        self._connections: weakref.WeakSet = weakref.WeakSet()
+        self._connections: Set[WebSocket] = set()
         self._connection_count: int = 0
         self._total_connections: int = 0
+        self._connections_lock: asyncio.Lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
         
         self._middleware: List[BaseMiddleware] = []
@@ -199,22 +177,12 @@ class WebSocketServer:
         self._server_task: Optional[asyncio.Task] = None
         self._signal_handlers_registered: bool = False
         
-        # Store settings reference for potential future use
         self._settings = settings
         
         self._validate_ssl_configuration()
     
     @classmethod
     def from_settings(cls, settings: 'AiowsSettings', ssl_context: Optional[ssl.SSLContext] = None) -> 'WebSocketServer':
-        """Create WebSocketServer instance from AiowsSettings
-        
-        Args:
-            settings: AiowsSettings instance with configuration
-            ssl_context: Optional SSL context (overrides settings)
-            
-        Returns:
-            Configured WebSocketServer instance
-        """
         return cls(
             ssl_context=ssl_context,
             settings=settings
@@ -227,11 +195,44 @@ class WebSocketServer:
         return self._total_connections
     
     def get_connection_stats(self) -> Dict[str, int]:
+        active_count = len(self._connections)
         return {
-            'active_connections': len(self._connections),
+            'active_connections': active_count,
             'total_connections': self._total_connections,
             'connection_count_tracked': self._connection_count
         }
+    
+    def get_backpressure_stats(self) -> Dict[str, Any]:
+        from .websocket import backpressure_metrics
+        
+        stats = {
+            'global_stats': backpressure_metrics.get_global_stats(),
+            'connection_stats': []
+        }
+        
+        for ws in list(self._connections):
+            try:
+                if hasattr(ws, 'get_backpressure_stats'):
+                    conn_stats = ws.get_backpressure_stats()
+                    stats['connection_stats'].append(conn_stats)
+            except Exception as e:
+                logger.debug(f"Error getting backpressure stats for connection: {e}")
+        
+        return stats
+    
+    def get_slow_connections(self) -> List[Dict[str, Any]]:
+        slow_connections = []
+        
+        for ws in list(self._connections):
+            try:
+                if hasattr(ws, 'get_backpressure_stats'):
+                    stats = ws.get_backpressure_stats()
+                    if stats.get('is_slow_client', False):
+                        slow_connections.append(stats)
+            except Exception as e:
+                logger.debug(f"Error checking slow connection: {e}")
+        
+        return slow_connections
     
     async def _start_periodic_cleanup(self) -> None:
         if self._cleanup_task is None or self._cleanup_task.done():
@@ -253,54 +254,67 @@ class WebSocketServer:
                 await asyncio.sleep(self._cleanup_interval)
                 if self._shutdown_event.is_set():
                     break
-                await self._cleanup_orphaned_connections()
+                await self._cleanup_dead_connections()
         except asyncio.CancelledError:
             logger.debug("Periodic cleanup task cancelled")
         except Exception as e:
             logger.warning(f"Error in periodic cleanup: {e}")
     
-    async def _cleanup_orphaned_connections(self) -> None:
+    async def _cleanup_dead_connections(self) -> None:
         try:
-            connections_snapshot = list(self._connections)
-            orphaned_count = 0
-            
-            for ws in connections_snapshot:
-                try:
-                    if hasattr(ws, 'closed') and ws.closed:
-                        if ws in self._connections:
-                            self._connections.discard(ws)
-                            orphaned_count += 1
-                            self._connection_count = max(0, self._connection_count - 1)
-                except Exception as e:
-                    logger.debug(f"Error checking connection state: {e}")
+            async with self._connections_lock:
+                dead_connections = []
+                
+                for ws in list(self._connections):
                     try:
+                        if hasattr(ws, 'closed') and ws.closed:
+                            dead_connections.append(ws)
+                    except Exception as e:
+                        logger.debug(f"Error checking connection state: {e}")
+                        dead_connections.append(ws)
+                
+                removed_count = 0
+                for ws in dead_connections:
+                    if ws in self._connections:
                         self._connections.discard(ws)
-                        orphaned_count += 1
-                        self._connection_count = max(0, self._connection_count - 1)
-                    except Exception:
-                        pass
-            
-            if orphaned_count > 0:
-                logger.debug(f"Cleaned up {orphaned_count} orphaned connections")
+                        removed_count += 1
+                
+                self._connection_count = max(0, self._connection_count - removed_count)
+                
+                if __debug__:
+                    assert len(self._connections) == self._connection_count, f"Connection count mismatch after cleanup: {len(self._connections)} != {self._connection_count}"
+                
+                if removed_count > 0:
+                    logger.debug(f"Cleaned up {removed_count} dead connections")
                 
         except Exception as e:
-            logger.warning(f"Error during orphaned connection cleanup: {e}")
+            logger.warning(f"Error during dead connection cleanup: {e}")
     
-    def _add_connection(self, ws: WebSocket) -> None:
+    async def _add_connection(self, ws: WebSocket) -> None:
         try:
-            self._connections.add(ws)
-            self._connection_count += 1
-            self._total_connections += 1
-            logger.debug(f"Added connection, active: {len(self._connections)}, total: {self._total_connections}")
+            async with self._connections_lock:
+                self._connections.add(ws)
+                self._connection_count += 1
+                self._total_connections += 1
+                
+                if __debug__:
+                    assert len(self._connections) == self._connection_count, f"Connection count mismatch after add: {len(self._connections)} != {self._connection_count}"
+                
+                logger.debug(f"Added connection, active: {len(self._connections)}, total: {self._total_connections}")
         except Exception as e:
             logger.warning(f"Error adding connection: {e}")
     
-    def _remove_connection(self, ws: WebSocket) -> None:
+    async def _remove_connection(self, ws: WebSocket) -> None:
         try:
-            if ws in self._connections:
-                self._connections.discard(ws)
-                self._connection_count = max(0, self._connection_count - 1)
-                logger.debug(f"Removed connection, active: {len(self._connections)}")
+            async with self._connections_lock:
+                if ws in self._connections:
+                    self._connections.discard(ws)
+                    self._connection_count = max(0, self._connection_count - 1)
+                    
+                    if __debug__:
+                        assert len(self._connections) == self._connection_count, f"Connection count mismatch after remove: {len(self._connections)} != {self._connection_count}"
+                    
+                    logger.debug(f"Removed connection, active: {len(self._connections)}")
         except Exception as e:
             logger.warning(f"Error removing connection: {e}")
     
@@ -448,14 +462,16 @@ class WebSocketServer:
         logger.info("Graceful shutdown completed")
     
     async def _close_all_connections(self, timeout: float) -> None:
-        if not self._connections:
-            return
+        async with self._connections_lock:
+            if not self._connections:
+                return
+            connection_count = len(self._connections)
+            connections_snapshot = list(self._connections)
         
-        logger.info(f"Closing {len(self._connections)} active connections...")
+        logger.info(f"Closing {connection_count} active connections...")
         start_time = time.time()
         
         close_tasks = []
-        connections_snapshot = list(self._connections)
         
         for ws in connections_snapshot:
             try:
@@ -464,7 +480,7 @@ class WebSocketServer:
                     close_tasks.append(task)
             except Exception as e:
                 logger.debug(f"Error initiating close for connection: {e}")
-                self._remove_connection(ws)
+                await self._remove_connection(ws)
         
         if close_tasks:
             try:
@@ -476,28 +492,33 @@ class WebSocketServer:
                 elapsed = time.time() - start_time
                 logger.warning(f"Connection close timeout after {elapsed:.1f}s, forcing closure")
                 
-                remaining_connections = list(self._connections)
+                async with self._connections_lock:
+                    remaining_connections = list(self._connections)
+                
                 for ws in remaining_connections:
                     try:
                         if not ws.closed:
                             asyncio.create_task(ws.close(code=1001, reason="Server shutdown"))
-                        self._remove_connection(ws)
+                        await self._remove_connection(ws)
                     except Exception as e:
                         logger.debug(f"Error force-closing connection: {str(e)}")
-                        self._remove_connection(ws)
+                        await self._remove_connection(ws)
         
         for _ in range(10):
-            if not self._connections:
-                break
+            async with self._connections_lock:
+                if not self._connections:
+                    break
+                remaining = len(self._connections)
             await asyncio.sleep(0.1)
         
-        remaining = len(self._connections)
-        if remaining > 0:
-            logger.warning(f"{remaining} connections did not close gracefully")
-            self._connections.clear()
-            self._connection_count = 0
-        else:
-            logger.info("All connections closed successfully")
+        async with self._connections_lock:
+            remaining = len(self._connections)
+            if remaining > 0:
+                logger.warning(f"{remaining} connections did not close gracefully")
+                self._connections.clear()
+                self._connection_count = 0
+            else:
+                logger.info("All connections closed successfully")
     
     async def _close_connection_gracefully(self, ws: WebSocket) -> None:
         try:
@@ -511,14 +532,15 @@ class WebSocketServer:
         except Exception as e:
             logger.debug(f"Error closing connection: {e}")
         finally:
-            self._remove_connection(ws)
+            await self._remove_connection(ws)
     
     async def _cleanup_resources(self) -> None:
         try:
-            await self._cleanup_orphaned_connections()
+            await self._cleanup_dead_connections()
             
-            self._connections.clear()
-            self._connection_count = 0
+            async with self._connections_lock:
+                self._connections.clear()
+                self._connection_count = 0
             
             if hasattr(CertificateManager, 'cleanup_temp_files'):
                 CertificateManager.cleanup_temp_files()
@@ -557,11 +579,24 @@ class WebSocketServer:
         self._update_dispatcher_middleware()
     
     async def _handle_connection(self, websocket) -> None:
-        ws_wrapper = WebSocket(websocket)
+        backpressure_settings = None
+        if self._settings and hasattr(self._settings, 'backpressure'):
+            backpressure_config = self._settings.backpressure
+            backpressure_settings = {
+                'enabled': backpressure_config.enabled,
+                'send_queue_max_size': backpressure_config.send_queue_max_size,
+                'send_queue_overflow_strategy': backpressure_config.send_queue_overflow_strategy,
+                'slow_client_threshold': backpressure_config.slow_client_threshold,
+                'slow_client_timeout': backpressure_config.slow_client_timeout,
+                'max_response_time_ms': backpressure_config.max_response_time_ms,
+                'enable_send_metrics': backpressure_config.enable_send_metrics
+            }
+        
+        ws_wrapper = WebSocket(websocket, backpressure_settings=backpressure_settings)
         connection_added = False
         
         try:
-            self._add_connection(ws_wrapper)
+            await self._add_connection(ws_wrapper)
             connection_added = True
             
             await self.dispatcher.dispatch_connect(ws_wrapper)
@@ -569,10 +604,7 @@ class WebSocketServer:
             while not ws_wrapper.closed and not self._shutdown_event.is_set():
                 try:
                     try:
-                        message_data = await asyncio.wait_for(
-                            ws_wrapper.receive_json(),
-                            timeout=1.0
-                        )
+                        message_data = await ws_wrapper.receive_json()
                         await self.dispatcher.dispatch_message(ws_wrapper, message_data)
                     except asyncio.TimeoutError:
                         continue
@@ -592,17 +624,21 @@ class WebSocketServer:
         finally:
             cleanup_error = None
             
-            if connection_added and ws_wrapper in self._connections:
-                reason = "Server shutdown" if self._shutdown_event.is_set() else "Connection closed"
-                try:
-                    await self.dispatcher.dispatch_disconnect(ws_wrapper, reason)
-                except Exception as e:
-                    cleanup_error = e
-                    logger.debug(f"Error in disconnect handler: {str(e)}")
+            if connection_added:
+                async with self._connections_lock:
+                    in_connections = ws_wrapper in self._connections
+                
+                if in_connections:
+                    reason = "Server shutdown" if self._shutdown_event.is_set() else "Connection closed"
+                    try:
+                        await self.dispatcher.dispatch_disconnect(ws_wrapper, reason)
+                    except Exception as e:
+                        cleanup_error = e
+                        logger.debug(f"Error in disconnect handler: {str(e)}")
             
             if connection_added:
                 try:
-                    self._remove_connection(ws_wrapper)
+                    await self._remove_connection(ws_wrapper)
                 except Exception as e:
                     if cleanup_error is None:
                         cleanup_error = e

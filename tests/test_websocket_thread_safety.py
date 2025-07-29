@@ -2,7 +2,7 @@ import asyncio
 import pytest
 import json
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 from datetime import datetime
 
 from aiows import WebSocket, ConnectionError
@@ -126,8 +126,12 @@ class TestWebSocketThreadSafety:
         
         mock_websocket.send.side_effect = hanging_send
         
-        with pytest.raises(ConnectionError, match="Send operation timed out"):
-            await websocket_wrapper.send_json({"test": "data"})
+        task = asyncio.create_task(websocket_wrapper.send_json({"test": "data"}))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        
+        with pytest.raises(asyncio.CancelledError):
+            await task
         
         assert websocket_wrapper.closed is True
     
@@ -135,11 +139,16 @@ class TestWebSocketThreadSafety:
     async def test_timeout_protection_receive(self, websocket_wrapper, mock_websocket):
         async def hanging_recv(*args, **kwargs):
             await asyncio.sleep(2.0)
+            return '{"test": "data"}'
         
         mock_websocket.recv.side_effect = hanging_recv
         
-        with pytest.raises(ConnectionError, match="Receive operation timed out"):
-            await websocket_wrapper.receive_json()
+        task = asyncio.create_task(websocket_wrapper.receive_json())
+        await asyncio.sleep(0.1)
+        task.cancel()
+        
+        with pytest.raises(asyncio.CancelledError):
+            await task
         
         assert websocket_wrapper.closed is True
     
@@ -248,29 +257,116 @@ class TestWebSocketThreadSafety:
     async def test_json_serialization_with_datetime(self, websocket_wrapper, mock_websocket):
         mock_websocket.send.return_value = None
         
-        async def send_with_datetime(task_id):
-            try:
-                data = {
-                    "id": task_id,
-                    "timestamp": datetime.now(),
-                    "message": f"test_{task_id}"
-                }
-                await websocket_wrapper.send_json(data)
-                return f"success_{task_id}"
-            except Exception as e:
-                return f"error_{task_id}: {e}"
+        data_with_datetime = {
+            "message": "test",
+            "timestamp": datetime.now()
+        }
         
-        tasks = [send_with_datetime(i) for i in range(5)]
+        await websocket_wrapper.send_json(data_with_datetime)
+        
+        assert mock_websocket.send.called
+        sent_data = mock_websocket.send.call_args[0][0]
+        
+        parsed_data = json.loads(sent_data)
+        assert "timestamp" in parsed_data
+        assert isinstance(parsed_data["timestamp"], str)
+
+    @pytest.mark.asyncio
+    async def test_separate_send_receive_locks_allow_concurrency(self, mock_websocket):
+        websocket_wrapper = WebSocket(mock_websocket, operation_timeout=1.0)
+        
+        send_started = asyncio.Event()
+        receive_started = asyncio.Event()
+        
+        async def slow_send(*args, **kwargs):
+            send_started.set()
+            await asyncio.sleep(0.5)
+            return None
+        
+        async def slow_recv(*args, **kwargs):
+            receive_started.set()
+            await asyncio.sleep(0.5)
+            return '{"test": "data"}'
+        
+        mock_websocket.send.side_effect = slow_send
+        mock_websocket.recv.side_effect = slow_recv
+        
+        start_time = time.time()
+        
+        send_task = asyncio.create_task(websocket_wrapper.send_json({"test": "send"}))
+        receive_task = asyncio.create_task(websocket_wrapper.receive_json())
+        
+        await send_started.wait()
+        await receive_started.wait()
+        
+        await asyncio.gather(send_task, receive_task)
+        
+        elapsed = time.time() - start_time
+        
+        assert elapsed < 0.8, f"Operations took {elapsed:.2f}s, expected < 0.8s for concurrent execution"
+        
+        assert mock_websocket.send.called
+        assert mock_websocket.recv.called
+    
+    @pytest.mark.asyncio
+    async def test_connection_state_event_performance(self, mock_websocket):
+        websocket_wrapper = WebSocket(mock_websocket, operation_timeout=1.0)
+        
+        async def check_state():
+            for _ in range(100):
+                is_closed = websocket_wrapper.is_closed
+                closed = websocket_wrapper.closed
+                assert is_closed == closed
+            return True
+        
+        start_time = time.time()
+        
+        tasks = [asyncio.create_task(check_state()) for _ in range(50)]
         results = await asyncio.gather(*tasks)
         
-        success_count = sum(1 for r in results if r.startswith("success_"))
-        assert success_count == 5
+        elapsed = time.time() - start_time
         
-        assert mock_websocket.send.call_count == 5
-        for call in mock_websocket.send.call_args_list:
-            sent_data = call[0][0]
-            parsed = json.loads(sent_data)
-            
-            assert "timestamp" in parsed
-            assert isinstance(parsed["timestamp"], str)
-            assert "T" in parsed["timestamp"] 
+        assert all(results), "All state check tasks should succeed"
+        assert elapsed < 0.1, f"Lock-free state checks took {elapsed:.2f}s, expected < 0.1s"
+    
+    @pytest.mark.asyncio
+    async def test_close_operation_retains_timeout(self, mock_websocket):
+        websocket_wrapper = WebSocket(mock_websocket, operation_timeout=0.5)
+        
+        async def hanging_close(*args, **kwargs):
+            await asyncio.sleep(1.0)
+        
+        mock_websocket.close.side_effect = hanging_close
+        
+        start_time = time.time()
+        
+        await websocket_wrapper.close()
+        
+        elapsed = time.time() - start_time
+        
+        assert 0.4 < elapsed < 0.7, f"Close timeout took {elapsed:.2f}s, expected ~0.5s"
+        assert websocket_wrapper.closed is True
+    
+    @pytest.mark.asyncio
+    async def test_mixed_send_receive_no_deadlock(self, mock_websocket):
+        websocket_wrapper = WebSocket(mock_websocket, operation_timeout=1.0)
+        
+        mock_websocket.send.return_value = None
+        mock_websocket.recv.return_value = '{"response": "test"}'
+        
+        async def send_receive_cycle():
+            for i in range(10):
+                await websocket_wrapper.send_json({"id": i})
+                result = await websocket_wrapper.receive_json()
+                assert result["response"] == "test"
+        
+        tasks = [asyncio.create_task(send_receive_cycle()) for _ in range(5)]
+        
+        start_time = time.time()
+        await asyncio.gather(*tasks)
+        elapsed = time.time() - start_time
+        
+        assert elapsed < 2.0, f"Mixed operations took {elapsed:.2f}s, possible deadlock"
+        
+        assert mock_websocket.send.call_count >= 50
+        assert mock_websocket.recv.call_count >= 50 

@@ -23,8 +23,8 @@ class TestConnectionManagement:
         mock_ws.send = AsyncMock()
         return mock_ws
     
-    def test_weakset_initialization(self, server):
-        assert isinstance(server._connections, weakref.WeakSet)
+    def test_set_initialization(self, server):
+        assert isinstance(server._connections, set)
         assert len(server._connections) == 0
         assert server._connection_count == 0
         assert server._total_connections == 0
@@ -42,51 +42,53 @@ class TestConnectionManagement:
     async def test_add_remove_connection(self, server, mock_websocket):
         ws_wrapper = WebSocket(mock_websocket)
         
-        server._add_connection(ws_wrapper)
+        await server._add_connection(ws_wrapper)
         assert len(server._connections) == 1
         assert server._connection_count == 1
         assert server._total_connections == 1
         assert server.get_active_connections_count() == 1
         
-        server._remove_connection(ws_wrapper)
+        await server._remove_connection(ws_wrapper)
         assert len(server._connections) == 0
         assert server._connection_count == 0
         assert server._total_connections == 1
     
     @pytest.mark.asyncio
-    async def test_weakset_automatic_cleanup(self, server, mock_websocket):
+    async def test_set_manual_cleanup(self, server, mock_websocket):
         ws_wrapper = WebSocket(mock_websocket)
         weak_ref = weakref.ref(ws_wrapper)
         
-        server._add_connection(ws_wrapper)
+        await server._add_connection(ws_wrapper)
         assert len(server._connections) == 1
         assert weak_ref() is not None
         
+        await server._remove_connection(ws_wrapper)
         del ws_wrapper
         gc.collect()
         
         assert weak_ref() is None
     
     @pytest.mark.asyncio
-    async def test_orphaned_connections_cleanup(self, server, mock_websocket):
+    async def test_dead_connections_cleanup(self, server, mock_websocket):
         connections = []
         for i in range(3):
             mock_ws = AsyncMock()
             mock_ws.closed = False
             ws_wrapper = WebSocket(mock_ws)
             connections.append(ws_wrapper)
-            server._add_connection(ws_wrapper)
+            await server._add_connection(ws_wrapper)
         
         assert len(server._connections) == 3
         assert server._connection_count == 3
         
-        connections[0]._is_closed = True
-        connections[1]._is_closed = True
+        connections[0]._mark_as_closed()
+        connections[1]._mark_as_closed()
         
-        await server._cleanup_orphaned_connections()
+        await server._cleanup_dead_connections()
         
-        assert len(server._connections) <= 1
-        assert server._connection_count <= 1
+        assert len(server._connections) == 1
+        assert server._connection_count == 1
+        assert connections[2] in server._connections
     
     @pytest.mark.asyncio
     async def test_periodic_cleanup_task(self, server):
@@ -113,14 +115,14 @@ class TestConnectionManagement:
              patch.object(server, '_remove_connection') as mock_remove:
             
             try:
-                server._add_connection(ws_wrapper)
+                await server._add_connection(ws_wrapper)
                 mock_add.assert_called_once_with(ws_wrapper)
                 raise Exception("Test exception")
             except:
                 pass
             
             await server.dispatcher.dispatch_disconnect(ws_wrapper, "Connection closed")
-            server._remove_connection(ws_wrapper)
+            await server._remove_connection(ws_wrapper)
             if not ws_wrapper.closed:
                 await ws_wrapper.close()
     
@@ -128,7 +130,7 @@ class TestConnectionManagement:
     async def test_error_handling_in_connection_cleanup(self, server, mock_websocket):
         ws_wrapper = WebSocket(mock_websocket)
         
-        server._add_connection(ws_wrapper)
+        await server._add_connection(ws_wrapper)
         server.dispatcher.dispatch_disconnect = AsyncMock(side_effect=Exception("Dispatch error"))
         ws_wrapper.close = AsyncMock(side_effect=Exception("Close error"))
         
@@ -143,7 +145,7 @@ class TestConnectionManagement:
             except:
                 pass
             
-            server._remove_connection(ws_wrapper)
+            await server._remove_connection(ws_wrapper)
             mock_remove.assert_called_once()
     
     @pytest.mark.asyncio
@@ -155,7 +157,7 @@ class TestConnectionManagement:
             mock_ws.close = AsyncMock()
             ws_wrapper = WebSocket(mock_ws)
             mock_connections.append(ws_wrapper)
-            server._add_connection(ws_wrapper)
+            await server._add_connection(ws_wrapper)
         
         assert len(server._connections) == 3
         
@@ -175,7 +177,7 @@ class TestConnectionManagement:
             mock_ws.closed = False
             ws_wrapper = WebSocket(mock_ws)
             connections.append(ws_wrapper)
-            server._add_connection(ws_wrapper)
+            await server._add_connection(ws_wrapper)
         
         stats = server.get_connection_stats()
         assert stats['active_connections'] == 5
@@ -183,7 +185,7 @@ class TestConnectionManagement:
         assert stats['connection_count_tracked'] == 5
         
         for i in range(2):
-            server._remove_connection(connections[i])
+            await server._remove_connection(connections[i])
         
         stats = server.get_connection_stats()
         assert stats['active_connections'] == 3
@@ -198,8 +200,8 @@ class TestConnectionManagement:
             mock_ws = AsyncMock()
             mock_ws.closed = False
             ws_wrapper = WebSocket(mock_ws)
-            server._add_connection(ws_wrapper)
-            server._remove_connection(ws_wrapper)
+            await server._add_connection(ws_wrapper)
+            await server._remove_connection(ws_wrapper)
             del ws_wrapper
         
         gc.collect()
@@ -209,27 +211,24 @@ class TestConnectionManagement:
         assert server._total_connections == 100
     
     @pytest.mark.asyncio
-    async def test_weakset_with_real_gc(self, server):
+    async def test_set_with_real_gc(self, server):
         mock_ws = AsyncMock()
         mock_ws.closed = False
         ws_wrapper = WebSocket(mock_ws)
         weak_ref = weakref.ref(ws_wrapper)
-        
-        server._add_connection(ws_wrapper)
+                
+        await server._add_connection(ws_wrapper)
         assert len(server._connections) == 1
         assert weak_ref() is not None
         
+        await server._remove_connection(ws_wrapper)
         del ws_wrapper
         del mock_ws
         
         gc.collect()
         
         assert weak_ref() is None
-        
-        try:
-            list(server._connections)
-        except:
-            pass
+        assert len(server._connections) == 0
     
     @pytest.mark.asyncio
     async def test_cleanup_interval_configuration(self, server):
@@ -266,12 +265,12 @@ class TestConnectionMemoryManagement:
             mock_ws.closed = False
             ws_wrapper = WebSocket(mock_ws)
             
-            server._add_connection(ws_wrapper)
+            await server._add_connection(ws_wrapper)
             
             try:
                 raise ConnectionError("Simulated connection error")
             except:
-                server._remove_connection(ws_wrapper)
+                await server._remove_connection(ws_wrapper)
                 if not ws_wrapper.closed:
                     try:
                         await ws_wrapper.close()
@@ -286,7 +285,7 @@ class TestConnectionMemoryManagement:
         assert server._connection_count == 0
     
     @pytest.mark.asyncio
-    async def test_weakset_handles_circular_references(self, server):
+    async def test_set_handles_circular_references(self, server):
         mock_ws = AsyncMock()
         mock_ws.closed = False
         ws_wrapper = WebSocket(mock_ws)
@@ -294,11 +293,12 @@ class TestConnectionMemoryManagement:
         ws_wrapper.circular_ref = ws_wrapper
         
         weak_ref = weakref.ref(ws_wrapper)
-        server._add_connection(ws_wrapper)
+        await server._add_connection(ws_wrapper)
         
         assert len(server._connections) == 1
         assert weak_ref() is not None
         
+        await server._remove_connection(ws_wrapper)
         del ws_wrapper
         gc.collect()
         

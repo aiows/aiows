@@ -12,13 +12,10 @@ Tests authorization (what users can do) beyond authentication (who they are):
 import pytest
 import asyncio
 import json
-import logging
 import threading
 import socket
 import time
-from io import StringIO
-from unittest.mock import patch
-from typing import Optional, Set, Dict, Any
+from typing import Set, Dict
 
 try:
     import websockets
@@ -31,15 +28,12 @@ from aiows import (
     WebSocket, 
     BaseMessage,
     AuthMiddleware,
-    LoggingMiddleware,
-    RateLimitingMiddleware,
     BaseMiddleware
 )
 from aiows.middleware.auth import generate_auth_token
 
 
 class RoleAuthorizationMiddleware(BaseMiddleware):
-    """Middleware for role-based authorization"""
     
     def __init__(self, role_permissions: Dict[str, Set[str]]):
         self.role_permissions = role_permissions
@@ -99,7 +93,6 @@ class RoleAuthorizationMiddleware(BaseMiddleware):
 
 
 class ResourceAuthorizationMiddleware(BaseMiddleware):
-    """Middleware for resource-based authorization (rooms, channels)"""
     
     def __init__(self):
         self.user_rooms = {
