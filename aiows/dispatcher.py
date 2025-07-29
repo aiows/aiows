@@ -3,7 +3,6 @@ Event dispatcher implementation
 """
 
 import asyncio
-import copy
 import logging
 import threading
 import time
@@ -12,7 +11,7 @@ from .websocket import WebSocket
 from .types import BaseMessage, ChatMessage, JoinRoomMessage, GameActionMessage, EventType
 from .exceptions import MessageValidationError, MiddlewareError, ConnectionError, AiowsException
 from .middleware.base import BaseMiddleware
-from typing import List, Callable, Any, Optional
+from typing import List, Optional
 
 
 class DispatcherErrorMetrics:
@@ -50,6 +49,14 @@ class MessageDispatcher:
         with self._middleware_lock:
             self._middleware.append(middleware)
     
+    def remove_middleware(self, middleware: BaseMiddleware) -> bool:
+        with self._middleware_lock:
+            try:
+                self._middleware.remove(middleware)
+                return True
+            except ValueError:
+                return False
+    
     def _log_error_with_context(self, error: Exception, operation: str, 
                                websocket: Optional[WebSocket] = None, 
                                additional_context: dict = None):
@@ -73,17 +80,16 @@ class MessageDispatcher:
     
     def _parse_message_safely(self, message_data: dict) -> BaseMessage:
         try:
-            safe_data = copy.deepcopy(message_data)
-            message_type = safe_data.get('type')
+            message_type = message_data.get('type')
             
             if message_type == 'chat':
-                return ChatMessage(**safe_data)
+                return ChatMessage(**message_data)
             elif message_type == 'join_room':
-                return JoinRoomMessage(**safe_data)
+                return JoinRoomMessage(**message_data)
             elif message_type == 'game_action':
-                return GameActionMessage(**safe_data)
+                return GameActionMessage(**message_data)
             else:
-                return BaseMessage(**safe_data)
+                return BaseMessage(**message_data)
                 
         except (TypeError, ValueError, KeyError) as e:
             dispatcher_error_metrics.increment('parsing')
@@ -272,13 +278,11 @@ class MessageDispatcher:
             self.logger.warning(f"No handler found for message type: {message_type}")
 
     async def _execute_middleware_chain(self, event_type: EventType, middleware_list: List[BaseMiddleware], *args) -> None:
-        """Execute middleware chain iteratively without complex executor objects"""
         middleware_index = 0
         
         async def next_handler(*handler_args) -> None:
             nonlocal middleware_index
             
-            # Use provided args if handler didn't modify them
             effective_args = handler_args if handler_args else args
             
             if middleware_index < len(middleware_list):
@@ -310,11 +314,8 @@ class MessageDispatcher:
                                 pass
                         return
                     
-                    # Continue with next middleware on error if should_continue is True
-                    # Note: middleware_index is already incremented, so we continue with next middleware
                     await next_handler(*effective_args)
             else:
-                # Execute final handlers when middleware chain is complete
                 if event_type == EventType.CONNECT:
                     await self._execute_connect_chain(*effective_args)
                 elif event_type == EventType.DISCONNECT:
@@ -326,21 +327,21 @@ class MessageDispatcher:
 
     async def dispatch_connect(self, websocket: WebSocket) -> None:
         with self._middleware_lock:
-            middleware_copy = self._middleware.copy()
+            middleware_snapshot = tuple(self._middleware)
         
-        await self._execute_middleware_chain(EventType.CONNECT, middleware_copy, websocket)
+        await self._execute_middleware_chain(EventType.CONNECT, middleware_snapshot, websocket)
 
     async def dispatch_disconnect(self, websocket: WebSocket, reason: str) -> None:
         with self._middleware_lock:
-            middleware_copy = self._middleware.copy()
+            middleware_snapshot = tuple(self._middleware)
         
-        await self._execute_middleware_chain(EventType.DISCONNECT, middleware_copy, websocket, reason)
+        await self._execute_middleware_chain(EventType.DISCONNECT, middleware_snapshot, websocket, reason)
 
     async def dispatch_message(self, websocket: WebSocket, message_data: dict) -> None:
         with self._middleware_lock:
-            middleware_copy = self._middleware.copy()
+            middleware_snapshot = tuple(self._middleware)
         
-        await self._execute_middleware_chain(EventType.MESSAGE, middleware_copy, websocket, message_data)
+        await self._execute_middleware_chain(EventType.MESSAGE, middleware_snapshot, websocket, message_data)
     
     @property
     def error_metrics(self) -> DispatcherErrorMetrics:
