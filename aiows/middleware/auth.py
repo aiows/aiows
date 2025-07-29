@@ -11,8 +11,7 @@ import logging
 import secrets
 import time
 from collections import defaultdict, deque, OrderedDict
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple, Union, TYPE_CHECKING
-from urllib.parse import parse_qs, urlparse
+from typing import Any, Awaitable, Callable, Dict, List, Optional, TYPE_CHECKING
 from .base import BaseMiddleware
 from ..websocket import WebSocket
 

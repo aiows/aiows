@@ -7,7 +7,7 @@ import json
 import time
 import unittest
 from http.client import HTTPConnection
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import aiows
 from aiows import (

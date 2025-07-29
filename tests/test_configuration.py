@@ -4,19 +4,16 @@ Tests for aiows configuration system
 
 import os
 import pytest
-import tempfile
-import time
-from pathlib import Path
 from unittest import mock
 
 from aiows.config import (
-    BaseConfig, ConfigValue, ConfigValidationError, ConfigMeta,
+    BaseConfig, ConfigValue, ConfigValidationError,
     positive_int, positive_number, valid_port, valid_host, 
     non_empty_string, valid_log_level, min_length, in_range, in_choices
 )
 from aiows.settings import (
-    ServerConfig, RateLimitConfig, ConnectionLimiterConfig, 
-    AuthConfig, LoggingConfig, SecurityConfig, AiowsSettings, create_settings
+    ServerConfig, 
+    AiowsSettings, create_settings
 )
 
 

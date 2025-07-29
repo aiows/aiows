@@ -3,20 +3,18 @@ Tests for improved error handling in websocket.py and dispatcher.py
 """
 
 import asyncio
-import json
 import socket
 import ssl
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from unittest.mock import Mock, AsyncMock, patch
 from aiows.websocket import WebSocket, error_metrics, ErrorMetrics
 from aiows.dispatcher import MessageDispatcher, dispatcher_error_metrics, DispatcherErrorMetrics
 from aiows.router import Router
 from aiows.exceptions import (
     ConnectionError, MessageValidationError, MiddlewareError, 
-    MessageSizeError, AiowsException
+    MessageSizeError
 )
 from aiows.middleware.base import BaseMiddleware
-from aiows.types import BaseMessage, ChatMessage
 
 
 class TestWebSocketErrorHandling:
@@ -134,7 +132,6 @@ class TestWebSocketErrorHandling:
         assert websocket_wrapper._error_count == 1
         assert websocket_wrapper.closed
         
-        # Use the testing method to reset connection state
         websocket_wrapper._reset_connection_state_for_testing()
         
         websocket_wrapper._websocket.send = AsyncMock()
@@ -211,19 +208,22 @@ class TestDispatcherErrorHandling:
         assert dispatcher_error_metrics.parsing_errors == 1
     
     def test_message_parsing_recursion_error(self, dispatcher):
-        circular_data = {"type": "chat"}
-        circular_data["self"] = circular_data
+        deep_data = {"type": "chat", "text": "test", "user_id": "user1"}
+        current = deep_data
+        for i in range(1000):
+            current["nested"] = {}
+            current = current["nested"]
         
-        with patch('copy.deepcopy', side_effect=RecursionError("Maximum recursion depth")):
+        with patch('aiows.types.ChatMessage.__init__', side_effect=RecursionError("Maximum recursion depth")):
             with pytest.raises(MessageValidationError, match="Message structure too complex"):
-                dispatcher._parse_message_safely(circular_data)
+                dispatcher._parse_message_safely(deep_data)
         
         assert dispatcher_error_metrics.parsing_errors == 1
     
     def test_message_parsing_memory_error(self, dispatcher):
-        with patch('copy.deepcopy', side_effect=MemoryError("Out of memory")):
+        with patch('aiows.types.ChatMessage.__init__', side_effect=MemoryError("Out of memory")):
             with pytest.raises(MemoryError):
-                dispatcher._parse_message_safely({"type": "chat", "content": "test"})
+                dispatcher._parse_message_safely({"type": "chat", "text": "test", "user_id": "user1"})
         
         assert dispatcher_error_metrics.critical_errors == 1
     
@@ -231,9 +231,9 @@ class TestDispatcherErrorHandling:
         class UnexpectedError(Exception):
             pass
         
-        with patch('copy.deepcopy', side_effect=UnexpectedError("Something unexpected")):
+        with patch('aiows.types.ChatMessage.__init__', side_effect=UnexpectedError("Something unexpected")):
             with pytest.raises(MessageValidationError, match="Unexpected parsing error"):
-                dispatcher._parse_message_safely({"type": "chat", "content": "test"})
+                dispatcher._parse_message_safely({"type": "chat", "text": "test", "user_id": "user1"})
         
         assert dispatcher_error_metrics.unexpected_errors == 1
     

@@ -2,7 +2,7 @@ import asyncio
 import pytest
 import json
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 from datetime import datetime
 
 from aiows import WebSocket, ConnectionError
@@ -121,45 +121,35 @@ class TestWebSocketThreadSafety:
     
     @pytest.mark.asyncio
     async def test_timeout_protection_send(self, websocket_wrapper, mock_websocket):
-        # Note: After optimization, send operations no longer use asyncio.wait_for()
-        # for better performance. Instead we test that long-running operations
-        # don't block and can be cancelled properly.
         async def hanging_send(*args, **kwargs):
             await asyncio.sleep(2.0)
         
         mock_websocket.send.side_effect = hanging_send
         
-        # Test that operation can be cancelled (no timeout needed)
         task = asyncio.create_task(websocket_wrapper.send_json({"test": "data"}))
-        await asyncio.sleep(0.1)  # Let it start
+        await asyncio.sleep(0.1)
         task.cancel()
         
         with pytest.raises(asyncio.CancelledError):
             await task
         
-        # Connection should be marked as closed after cancellation
         assert websocket_wrapper.closed is True
     
     @pytest.mark.asyncio
     async def test_timeout_protection_receive(self, websocket_wrapper, mock_websocket):
-        # Note: After optimization, receive operations no longer use asyncio.wait_for()
-        # for better performance. Instead we test that long-running operations
-        # don't block and can be cancelled properly.
         async def hanging_recv(*args, **kwargs):
             await asyncio.sleep(2.0)
-            return '{"test": "data"}'  # Return valid data after delay
+            return '{"test": "data"}'
         
         mock_websocket.recv.side_effect = hanging_recv
         
-        # Test that operation can be cancelled (no timeout needed)
         task = asyncio.create_task(websocket_wrapper.receive_json())
-        await asyncio.sleep(0.1)  # Let it start
+        await asyncio.sleep(0.1)
         task.cancel()
         
         with pytest.raises(asyncio.CancelledError):
             await task
         
-        # Connection should be marked as closed after cancellation
         assert websocket_wrapper.closed is True
     
     @pytest.mark.asyncio
@@ -283,7 +273,6 @@ class TestWebSocketThreadSafety:
 
     @pytest.mark.asyncio
     async def test_separate_send_receive_locks_allow_concurrency(self, mock_websocket):
-        """Test that separate send/receive locks allow true concurrency"""
         websocket_wrapper = WebSocket(mock_websocket, operation_timeout=1.0)
         
         send_started = asyncio.Event()
@@ -304,32 +293,25 @@ class TestWebSocketThreadSafety:
         
         start_time = time.time()
         
-        # Start both operations concurrently
         send_task = asyncio.create_task(websocket_wrapper.send_json({"test": "send"}))
         receive_task = asyncio.create_task(websocket_wrapper.receive_json())
         
-        # Wait for both to start
         await send_started.wait()
         await receive_started.wait()
         
-        # Complete both operations
         await asyncio.gather(send_task, receive_task)
         
         elapsed = time.time() - start_time
         
-        # Both operations should complete in ~0.5 seconds (concurrent) not ~1.0 seconds (sequential)
         assert elapsed < 0.8, f"Operations took {elapsed:.2f}s, expected < 0.8s for concurrent execution"
         
-        # Verify both operations completed successfully
         assert mock_websocket.send.called
         assert mock_websocket.recv.called
     
     @pytest.mark.asyncio
     async def test_connection_state_event_performance(self, mock_websocket):
-        """Test that connection state checks using asyncio.Event are lock-free"""
         websocket_wrapper = WebSocket(mock_websocket, operation_timeout=1.0)
         
-        # Test multiple concurrent state checks (should be lock-free)
         async def check_state():
             for _ in range(100):
                 is_closed = websocket_wrapper.is_closed
@@ -339,40 +321,34 @@ class TestWebSocketThreadSafety:
         
         start_time = time.time()
         
-        # Run many concurrent state checks
         tasks = [asyncio.create_task(check_state()) for _ in range(50)]
         results = await asyncio.gather(*tasks)
         
         elapsed = time.time() - start_time
         
-        # All tasks should complete very quickly since no locks are involved
         assert all(results), "All state check tasks should succeed"
         assert elapsed < 0.1, f"Lock-free state checks took {elapsed:.2f}s, expected < 0.1s"
     
     @pytest.mark.asyncio
     async def test_close_operation_retains_timeout(self, mock_websocket):
-        """Test that close operation still uses timeout as required"""
         websocket_wrapper = WebSocket(mock_websocket, operation_timeout=0.5)
         
         async def hanging_close(*args, **kwargs):
-            await asyncio.sleep(1.0)  # Longer than timeout
+            await asyncio.sleep(1.0)
         
         mock_websocket.close.side_effect = hanging_close
         
         start_time = time.time()
         
-        # Close operation should timeout after operation_timeout seconds
         await websocket_wrapper.close()
         
         elapsed = time.time() - start_time
         
-        # Should timeout around 0.5 seconds (operation_timeout)
         assert 0.4 < elapsed < 0.7, f"Close timeout took {elapsed:.2f}s, expected ~0.5s"
         assert websocket_wrapper.closed is True
     
     @pytest.mark.asyncio
     async def test_mixed_send_receive_no_deadlock(self, mock_websocket):
-        """Test that mixed send/receive operations don't cause deadlocks"""
         websocket_wrapper = WebSocket(mock_websocket, operation_timeout=1.0)
         
         mock_websocket.send.return_value = None
@@ -384,16 +360,13 @@ class TestWebSocketThreadSafety:
                 result = await websocket_wrapper.receive_json()
                 assert result["response"] == "test"
         
-        # Run multiple concurrent send/receive cycles
         tasks = [asyncio.create_task(send_receive_cycle()) for _ in range(5)]
         
         start_time = time.time()
         await asyncio.gather(*tasks)
         elapsed = time.time() - start_time
         
-        # Should complete without deadlocks in reasonable time
         assert elapsed < 2.0, f"Mixed operations took {elapsed:.2f}s, possible deadlock"
         
-        # Verify operations completed
-        assert mock_websocket.send.call_count >= 50  # 5 tasks * 10 calls each
+        assert mock_websocket.send.call_count >= 50
         assert mock_websocket.recv.call_count >= 50 

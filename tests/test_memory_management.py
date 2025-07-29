@@ -4,14 +4,12 @@ import pytest
 import psutil
 import os
 import time
-from memory_profiler import profile
 from unittest.mock import AsyncMock, Mock
 
 from aiows.dispatcher import MessageDispatcher
 from aiows.router import Router
 from aiows.websocket import WebSocket
 from aiows.middleware.base import BaseMiddleware
-from aiows.types import ChatMessage
 from aiows.exceptions import MiddlewareError
 
 
@@ -247,14 +245,12 @@ class TestMemoryManagement:
     
     @pytest.mark.asyncio
     async def test_memory_cleanup_simplified_execution(self, dispatcher, mock_websocket):
-        """Test that simplified middleware execution doesn't create memory leaks"""
         initial_memory = self.get_memory_usage()
         gc.collect()
         
         middleware = MockMiddleware("cleanup_test")
         dispatcher.add_middleware(middleware)
         
-        # Execute many middleware chains to test for memory leaks
         for i in range(200):
             await dispatcher.dispatch_connect(mock_websocket)
             await dispatcher.dispatch_message(mock_websocket, {
@@ -273,7 +269,6 @@ class TestMemoryManagement:
         
         print(f"Simplified execution memory growth: {memory_growth:.2f} MB")
         
-        # With simplified execution, memory growth should be minimal
         assert memory_growth < 8, f"Memory leak in simplified execution: {memory_growth:.2f} MB growth"
     
     @pytest.mark.asyncio

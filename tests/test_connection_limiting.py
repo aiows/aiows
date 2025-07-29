@@ -1,8 +1,7 @@
 import asyncio
 import time
 import pytest
-from unittest.mock import AsyncMock, MagicMock, Mock
-from typing import List, Optional
+from unittest.mock import AsyncMock, Mock
 
 from aiows.middleware.connection_limiter import ConnectionLimiterMiddleware
 from aiows.websocket import WebSocket
@@ -14,15 +13,11 @@ class MockWebSocket(WebSocket):
         mock_ws.remote_address = (remote_ip, 12345)
         super().__init__(mock_ws)
         
-        # Initialize connection state properly for the new Event-based system
-        # No need to manually set _is_closed since it's now managed by asyncio.Event
-        
         self.send_data = []
         self.close_code = None
         self.close_reason = None
     
     async def close(self, code: int = 1000, reason: str = ""):
-        # Call parent close method to properly mark as closed
         await super().close(code, reason)
         self.close_code = code
         self.close_reason = reason

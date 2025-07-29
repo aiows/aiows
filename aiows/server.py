@@ -221,16 +221,12 @@ class WebSocketServer:
         )
     
     def get_active_connections_count(self) -> int:
-        # For backward compatibility, keep this synchronous
-        # Race conditions are handled by the lock in async operations
         return len(self._connections)
     
     def get_total_connections_count(self) -> int:
         return self._total_connections
     
     def get_connection_stats(self) -> Dict[str, int]:
-        # For backward compatibility, keep this synchronous
-        # Note: This may not be perfectly synchronized, but it's for monitoring only
         active_count = len(self._connections)
         return {
             'active_connections': active_count,
@@ -267,11 +263,9 @@ class WebSocketServer:
     async def _cleanup_dead_connections(self) -> None:
         """Periodically clean up closed connections from the set"""
         try:
-            # Single atomic operation - identify and remove dead connections in one go
             async with self._connections_lock:
                 dead_connections = []
                 
-                # Identify dead connections while holding the lock
                 for ws in list(self._connections):
                     try:
                         if hasattr(ws, 'closed') and ws.closed:
@@ -280,17 +274,14 @@ class WebSocketServer:
                         logger.debug(f"Error checking connection state: {e}")
                         dead_connections.append(ws)
                 
-                # Remove dead connections immediately
                 removed_count = 0
                 for ws in dead_connections:
                     if ws in self._connections:
                         self._connections.discard(ws)
                         removed_count += 1
                 
-                # Update connection count atomically
                 self._connection_count = max(0, self._connection_count - removed_count)
                 
-                # Debug assertion to ensure count synchronization
                 if __debug__:
                     assert len(self._connections) == self._connection_count, f"Connection count mismatch after cleanup: {len(self._connections)} != {self._connection_count}"
                 
@@ -307,7 +298,6 @@ class WebSocketServer:
                 self._connection_count += 1
                 self._total_connections += 1
                 
-                # Debug assertion to ensure count synchronization
                 if __debug__:
                     assert len(self._connections) == self._connection_count, f"Connection count mismatch after add: {len(self._connections)} != {self._connection_count}"
                 
@@ -322,7 +312,6 @@ class WebSocketServer:
                     self._connections.discard(ws)
                     self._connection_count = max(0, self._connection_count - 1)
                     
-                    # Debug assertion to ensure count synchronization
                     if __debug__:
                         assert len(self._connections) == self._connection_count, f"Connection count mismatch after remove: {len(self._connections)} != {self._connection_count}"
                     
@@ -474,7 +463,6 @@ class WebSocketServer:
         logger.info("Graceful shutdown completed")
     
     async def _close_all_connections(self, timeout: float) -> None:
-        # Check if there are connections to close
         async with self._connections_lock:
             if not self._connections:
                 return
@@ -505,7 +493,6 @@ class WebSocketServer:
                 elapsed = time.time() - start_time
                 logger.warning(f"Connection close timeout after {elapsed:.1f}s, forcing closure")
                 
-                # Get fresh snapshot after timeout
                 async with self._connections_lock:
                     remaining_connections = list(self._connections)
                 
@@ -518,7 +505,6 @@ class WebSocketServer:
                         logger.debug(f"Error force-closing connection: {str(e)}")
                         await self._remove_connection(ws)
         
-        # Wait for connections to finish closing
         for _ in range(10):
             async with self._connections_lock:
                 if not self._connections:
@@ -626,7 +612,6 @@ class WebSocketServer:
         finally:
             cleanup_error = None
             
-            # Check if connection is still in set before dispatch_disconnect
             if connection_added:
                 async with self._connections_lock:
                     in_connections = ws_wrapper in self._connections

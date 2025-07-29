@@ -6,7 +6,6 @@ import threading
 import socket
 import time
 from io import StringIO
-from unittest.mock import patch
 
 try:
     import websockets

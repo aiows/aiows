@@ -4,7 +4,6 @@ import json
 import threading
 import time
 import socket
-import weakref
 from unittest.mock import Mock, AsyncMock, patch
 from typing import Dict, Any
 

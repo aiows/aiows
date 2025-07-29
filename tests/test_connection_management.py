@@ -55,7 +55,6 @@ class TestConnectionManagement:
     
     @pytest.mark.asyncio
     async def test_set_manual_cleanup(self, server, mock_websocket):
-        """Test manual cleanup since we no longer use WeakSet automatic cleanup"""
         ws_wrapper = WebSocket(mock_websocket)
         weak_ref = weakref.ref(ws_wrapper)
         
@@ -63,7 +62,6 @@ class TestConnectionManagement:
         assert len(server._connections) == 1
         assert weak_ref() is not None
         
-        # With regular set, we need manual cleanup
         await server._remove_connection(ws_wrapper)
         del ws_wrapper
         gc.collect()
@@ -72,7 +70,6 @@ class TestConnectionManagement:
     
     @pytest.mark.asyncio
     async def test_dead_connections_cleanup(self, server, mock_websocket):
-        """Test cleanup of dead/closed connections"""
         connections = []
         for i in range(3):
             mock_ws = AsyncMock()
@@ -84,7 +81,6 @@ class TestConnectionManagement:
         assert len(server._connections) == 3
         assert server._connection_count == 3
         
-        # Mark WebSocket wrappers as closed to simulate closed connections
         connections[0]._mark_as_closed()
         connections[1]._mark_as_closed()
         
@@ -216,17 +212,15 @@ class TestConnectionManagement:
     
     @pytest.mark.asyncio
     async def test_set_with_real_gc(self, server):
-        """Test regular set behavior with garbage collection"""
         mock_ws = AsyncMock()
         mock_ws.closed = False
         ws_wrapper = WebSocket(mock_ws)
         weak_ref = weakref.ref(ws_wrapper)
-        
+                
         await server._add_connection(ws_wrapper)
         assert len(server._connections) == 1
         assert weak_ref() is not None
         
-        # With regular set, manual cleanup needed
         await server._remove_connection(ws_wrapper)
         del ws_wrapper
         del mock_ws
@@ -292,7 +286,6 @@ class TestConnectionMemoryManagement:
     
     @pytest.mark.asyncio
     async def test_set_handles_circular_references(self, server):
-        """Test that regular set works with circular references when manually cleaned"""
         mock_ws = AsyncMock()
         mock_ws.closed = False
         ws_wrapper = WebSocket(mock_ws)
@@ -305,7 +298,6 @@ class TestConnectionMemoryManagement:
         assert len(server._connections) == 1
         assert weak_ref() is not None
         
-        # Manual cleanup needed with regular set
         await server._remove_connection(ws_wrapper)
         del ws_wrapper
         gc.collect()

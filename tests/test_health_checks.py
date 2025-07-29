@@ -4,7 +4,6 @@ Tests for aiows health check system
 
 import asyncio
 import json
-import threading
 import time
 import unittest
 from datetime import datetime

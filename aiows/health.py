@@ -11,12 +11,11 @@ import resource
 import shutil
 import threading
 import time
-import weakref
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import Any, Callable, Dict, List, Optional, Union, Awaitable
-from urllib.parse import urlparse, parse_qs
+from typing import Any, Callable, Dict, List, Optional, Awaitable
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
