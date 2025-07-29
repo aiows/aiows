@@ -13,7 +13,7 @@ import tempfile
 import time
 import warnings
 import websockets
-from typing import Dict, List, Optional, Union, TYPE_CHECKING, Set
+from typing import Dict, List, Optional, Union, TYPE_CHECKING, Set, Any
 from .router import Router
 from .dispatcher import MessageDispatcher
 from .websocket import WebSocket
@@ -32,7 +32,6 @@ class CertificateManager:
     
     @classmethod
     def cleanup_temp_files(cls):
-        """Clean up temporary certificate files"""
         for file_path in cls._temp_files:
             try:
                 if os.path.exists(file_path):
@@ -48,11 +47,6 @@ class CertificateManager:
                                  org_name: str = "aiows Development",
                                  country: str = "US",
                                  days: int = 365) -> tuple[str, str]:
-        """Generate self-signed certificate using OpenSSL
-        
-        Returns:
-            Tuple of (cert_file_path, key_file_path)
-        """
         cert_file = tempfile.NamedTemporaryFile(suffix='.pem', delete=False)
         key_file = tempfile.NamedTemporaryFile(suffix='.key', delete=False)
         cert_file.close()
@@ -87,7 +81,6 @@ class CertificateManager:
     
     @classmethod
     def create_secure_ssl_context(cls, cert_file: str, key_file: str) -> ssl.SSLContext:
-        """Create securely configured SSL context"""
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         
         context.load_cert_chain(cert_file, key_file)
@@ -101,7 +94,6 @@ class CertificateManager:
     
     @classmethod
     def validate_certificate(cls, cert_file: str) -> Dict[str, Union[str, bool]]:
-        """Validate certificate file and return info"""
         try:
             cmd = ['openssl', 'x509', '-in', cert_file, '-text', '-noout']
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -132,32 +124,19 @@ class WebSocketServer:
                  require_ssl_in_production: bool = True,
                  cert_config: Optional[Dict[str, str]] = None,
                  settings: Optional['AiowsSettings'] = None):
-        """Initialize WebSocket server
-        
-        Args:
-            ssl_context: SSL context for secure connections (None = no SSL)
-            is_production: Whether running in production environment
-            require_ssl_in_production: Whether to require SSL in production
-            cert_config: Certificate configuration (common_name, org_name, country)
-            settings: AiowsSettings instance for configuration (overrides other params)
-        """
-        # Import here to avoid circular imports
         if settings is None:
             try:
                 from .settings import create_settings
                 settings = create_settings()
             except ImportError:
-                # Fallback to defaults if settings not available
                 settings = None
         
-        # Set server configuration from settings or parameters
         if settings is not None:
             self.host: str = settings.server.host
             self.port: int = settings.server.port
             self._cleanup_interval: float = settings.server.cleanup_interval
             self._shutdown_timeout: float = settings.server.shutdown_timeout
             
-            # Override parameters with settings if provided
             if ssl_context is None and hasattr(settings.server, 'ssl_context'):
                 ssl_context = getattr(settings.server, 'ssl_context', None)
             
@@ -172,7 +151,6 @@ class WebSocketServer:
                     'days': settings.server.ssl_cert_days
                 }
         else:
-            # Fallback to hardcoded defaults for backward compatibility
             self.host: str = "localhost"
             self.port: int = 8000
             self._cleanup_interval: float = 30.0
@@ -199,22 +177,12 @@ class WebSocketServer:
         self._server_task: Optional[asyncio.Task] = None
         self._signal_handlers_registered: bool = False
         
-        # Store settings reference for potential future use
         self._settings = settings
         
         self._validate_ssl_configuration()
     
     @classmethod
     def from_settings(cls, settings: 'AiowsSettings', ssl_context: Optional[ssl.SSLContext] = None) -> 'WebSocketServer':
-        """Create WebSocketServer instance from AiowsSettings
-        
-        Args:
-            settings: AiowsSettings instance with configuration
-            ssl_context: Optional SSL context (overrides settings)
-            
-        Returns:
-            Configured WebSocketServer instance
-        """
         return cls(
             ssl_context=ssl_context,
             settings=settings
@@ -233,6 +201,38 @@ class WebSocketServer:
             'total_connections': self._total_connections,
             'connection_count_tracked': self._connection_count
         }
+    
+    def get_backpressure_stats(self) -> Dict[str, Any]:
+        from .websocket import backpressure_metrics
+        
+        stats = {
+            'global_stats': backpressure_metrics.get_global_stats(),
+            'connection_stats': []
+        }
+        
+        for ws in list(self._connections):
+            try:
+                if hasattr(ws, 'get_backpressure_stats'):
+                    conn_stats = ws.get_backpressure_stats()
+                    stats['connection_stats'].append(conn_stats)
+            except Exception as e:
+                logger.debug(f"Error getting backpressure stats for connection: {e}")
+        
+        return stats
+    
+    def get_slow_connections(self) -> List[Dict[str, Any]]:
+        slow_connections = []
+        
+        for ws in list(self._connections):
+            try:
+                if hasattr(ws, 'get_backpressure_stats'):
+                    stats = ws.get_backpressure_stats()
+                    if stats.get('is_slow_client', False):
+                        slow_connections.append(stats)
+            except Exception as e:
+                logger.debug(f"Error checking slow connection: {e}")
+        
+        return slow_connections
     
     async def _start_periodic_cleanup(self) -> None:
         if self._cleanup_task is None or self._cleanup_task.done():
@@ -261,7 +261,6 @@ class WebSocketServer:
             logger.warning(f"Error in periodic cleanup: {e}")
     
     async def _cleanup_dead_connections(self) -> None:
-        """Periodically clean up closed connections from the set"""
         try:
             async with self._connections_lock:
                 dead_connections = []
@@ -580,7 +579,20 @@ class WebSocketServer:
         self._update_dispatcher_middleware()
     
     async def _handle_connection(self, websocket) -> None:
-        ws_wrapper = WebSocket(websocket)
+        backpressure_settings = None
+        if self._settings and hasattr(self._settings, 'backpressure'):
+            backpressure_config = self._settings.backpressure
+            backpressure_settings = {
+                'enabled': backpressure_config.enabled,
+                'send_queue_max_size': backpressure_config.send_queue_max_size,
+                'send_queue_overflow_strategy': backpressure_config.send_queue_overflow_strategy,
+                'slow_client_threshold': backpressure_config.slow_client_threshold,
+                'slow_client_timeout': backpressure_config.slow_client_timeout,
+                'max_response_time_ms': backpressure_config.max_response_time_ms,
+                'enable_send_metrics': backpressure_config.enable_send_metrics
+            }
+        
+        ws_wrapper = WebSocket(websocket, backpressure_settings=backpressure_settings)
         connection_added = False
         
         try:
