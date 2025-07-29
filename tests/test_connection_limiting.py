@@ -126,7 +126,9 @@ class TestConnectionLimiterMiddleware:
         assert middleware._check_rate_limit(ip) is False
         
         old_time = time.time() - 70
-        middleware.connection_attempts[ip][:5] = [old_time] * 5
+        attempts = middleware.connection_attempts[ip]
+        new_attempts = [old_time] * 5 + list(attempts)[5:]
+        middleware.connection_attempts[ip] = type(attempts)(new_attempts)
         
         assert middleware._check_rate_limit(ip) is True
     
