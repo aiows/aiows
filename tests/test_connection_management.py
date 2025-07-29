@@ -85,13 +85,14 @@ class TestConnectionManagement:
         assert server._connection_count == 3
         
         # Mark WebSocket wrappers as closed to simulate closed connections
-        connections[0]._is_closed = True  
-        connections[1]._is_closed = True
+        connections[0]._mark_as_closed()
+        connections[1]._mark_as_closed()
         
         await server._cleanup_dead_connections()
         
         assert len(server._connections) == 1
         assert server._connection_count == 1
+        assert connections[2] in server._connections
     
     @pytest.mark.asyncio
     async def test_periodic_cleanup_task(self, server):

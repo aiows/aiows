@@ -42,14 +42,39 @@ class WebSocket:
                  max_message_size: int = DEFAULT_MAX_MESSAGE_SIZE):
         self._websocket = websocket
         self.context: Dict[str, Any] = {}
-        self._is_closed: bool = False
-        self._lock = asyncio.Lock()
+        
+        # Optimized connection state management with asyncio.Event
+        self._is_closed_event = asyncio.Event()
+        self._is_closed_event.clear()  # Start as not closed
+        
+        # Separate locks for send and receive operations for better concurrency
+        self._send_lock = asyncio.Lock()
+        self._receive_lock = asyncio.Lock()
+        
+        # Close operation still needs protection with dedicated lock
+        self._close_lock = asyncio.Lock()
+        
         self._operation_timeout = operation_timeout
         self._max_message_size = max_message_size
         self._error_count = 0
         
         if max_message_size <= 0:
             raise ValueError("max_message_size must be positive")
+    
+    # Lock-free connection state checks for better performance
+    @property
+    def _is_closed(self) -> bool:
+        """Lock-free connection state check"""
+        return self._is_closed_event.is_set()
+    
+    def _mark_as_closed(self):
+        """Mark connection as closed (thread-safe)"""
+        self._is_closed_event.set()
+    
+    def _reset_connection_state_for_testing(self):
+        """Reset connection state for testing purposes ONLY"""
+        self._is_closed_event.clear()
+        self._error_count = 0
     
     def _log_error_with_context(self, error: Exception, operation: str, additional_context: Dict[str, Any] = None):
         context = {
@@ -67,11 +92,17 @@ class WebSocket:
     
     def _handle_critical_error(self, error: Exception, operation: str):
         self._error_count += 1
-        self._is_closed = True
+        self._mark_as_closed()
         self._log_error_with_context(error, operation, {'critical': True})
     
     async def send_json(self, data: dict) -> None:
-        async with self._lock:
+        # Lock-free connection state check for performance
+        if self._is_closed:
+            raise ConnectionError("WebSocket connection is closed")
+        
+        # Separate send lock allows concurrent receive operations
+        async with self._send_lock:
+            # Double-check pattern for connection state
             if self._is_closed:
                 raise ConnectionError("WebSocket connection is closed")
             
@@ -83,20 +114,19 @@ class WebSocket:
                 
                 json_data = json.dumps(data, default=json_serializer)
                 
-                await asyncio.wait_for(
-                    self._websocket.send(json_data),
-                    timeout=self._operation_timeout
-                )
+                # Remove asyncio.wait_for() for better performance in send operations
+                await self._websocket.send(json_data)
                 
                 self._error_count = 0
                 
             except asyncio.TimeoutError as e:
+                # Handle TimeoutError specifically for backwards compatibility
                 error_metrics.increment('timeout')
                 self._handle_critical_error(e, 'send_json')
                 raise ConnectionError(f"Send operation timed out after {self._operation_timeout} seconds")
-            
+                
             except asyncio.CancelledError:
-                self._is_closed = True
+                self._mark_as_closed()
                 raise
             
             except (TypeError, ValueError) as e:
@@ -129,15 +159,25 @@ class WebSocket:
         await self.send_json(message.dict())
     
     async def receive_json(self) -> dict:
-        async with self._lock:
+        # Lock-free connection state check for performance
+        if self._is_closed:
+            raise ConnectionError("WebSocket connection is closed")
+        
+        # Separate receive lock allows concurrent send operations
+        async with self._receive_lock:
+            # Double-check pattern for connection state
             if self._is_closed:
                 raise ConnectionError("WebSocket connection is closed")
             
             try:
-                raw_data = await asyncio.wait_for(
-                    self._websocket.recv(),
-                    timeout=self._operation_timeout
-                )
+                # Remove asyncio.wait_for() for better performance in receive operations
+                raw_data = await self._websocket.recv()
+                
+                # Handle potential None return from mock objects or protocol errors
+                if raw_data is None:
+                    error_metrics.increment('connection')
+                    self._handle_critical_error(Exception("Received None data"), 'receive_json')
+                    raise ConnectionError("WebSocket protocol error: received None data")
                 
                 message_size = len(raw_data)
                 if message_size > self._max_message_size:
@@ -158,12 +198,13 @@ class WebSocket:
                     raise ConnectionError(f"Invalid JSON received: {str(e)}")
                 
             except asyncio.TimeoutError as e:
+                # Handle TimeoutError specifically for backwards compatibility
                 error_metrics.increment('timeout')
                 self._handle_critical_error(e, 'receive_json')
                 raise ConnectionError(f"Receive operation timed out after {self._operation_timeout} seconds")
-            
+                
             except asyncio.CancelledError:
-                self._is_closed = True
+                self._mark_as_closed()
                 raise
             
             except MessageSizeError:
@@ -191,15 +232,25 @@ class WebSocket:
                 raise ConnectionError(f"Unexpected error during receive: {str(e)}")
     
     async def recv(self) -> str:
-        async with self._lock:
+        # Lock-free connection state check for performance
+        if self._is_closed:
+            raise ConnectionError("WebSocket connection is closed")
+        
+        # Separate receive lock allows concurrent send operations
+        async with self._receive_lock:
+            # Double-check pattern for connection state
             if self._is_closed:
                 raise ConnectionError("WebSocket connection is closed")
             
             try:
-                raw_data = await asyncio.wait_for(
-                    self._websocket.recv(),
-                    timeout=self._operation_timeout
-                )
+                # Remove asyncio.wait_for() for better performance in receive operations
+                raw_data = await self._websocket.recv()
+                
+                # Handle potential None return from mock objects or protocol errors
+                if raw_data is None:
+                    error_metrics.increment('connection')
+                    self._handle_critical_error(Exception("Received None data"), 'recv')
+                    raise ConnectionError("WebSocket protocol error: received None data")
                 
                 message_size = len(raw_data)
                 if message_size > self._max_message_size:
@@ -211,12 +262,13 @@ class WebSocket:
                 return raw_data
                 
             except asyncio.TimeoutError as e:
+                # Handle TimeoutError specifically for backwards compatibility
                 error_metrics.increment('timeout')
                 self._handle_critical_error(e, 'recv')
                 raise ConnectionError(f"Receive operation timed out after {self._operation_timeout} seconds")
-            
+                
             except asyncio.CancelledError:
-                self._is_closed = True
+                self._mark_as_closed()
                 raise
             
             except MessageSizeError:
@@ -244,25 +296,30 @@ class WebSocket:
                 raise ConnectionError(f"Unexpected error during receive: {str(e)}")
     
     async def send(self, data: str) -> None:
-        async with self._lock:
+        # Lock-free connection state check for performance
+        if self._is_closed:
+            raise ConnectionError("WebSocket connection is closed")
+        
+        # Separate send lock allows concurrent receive operations
+        async with self._send_lock:
+            # Double-check pattern for connection state
             if self._is_closed:
                 raise ConnectionError("WebSocket connection is closed")
             
             try:
-                await asyncio.wait_for(
-                    self._websocket.send(data),
-                    timeout=self._operation_timeout
-                )
+                # Remove asyncio.wait_for() for better performance in send operations
+                await self._websocket.send(data)
                 
                 self._error_count = 0
                 
             except asyncio.TimeoutError as e:
+                # Handle TimeoutError specifically for backwards compatibility
                 error_metrics.increment('timeout')
                 self._handle_critical_error(e, 'send')
                 raise ConnectionError(f"Send operation timed out after {self._operation_timeout} seconds")
-            
+                
             except asyncio.CancelledError:
-                self._is_closed = True
+                self._mark_as_closed()
                 raise
             
             except (socket.error, OSError) as e:
@@ -287,14 +344,16 @@ class WebSocket:
                 raise ConnectionError(f"Unexpected error during send: {str(e)}")
     
     async def close(self, code: int = 1000, reason: str = "") -> None:
-        async with self._lock:
+        # Use dedicated close lock to prevent concurrent close operations
+        async with self._close_lock:
             if self._is_closed:
                 logger.debug("WebSocket connection already closed, ignoring close() call")
                 return
             
-            self._is_closed = True
+            self._mark_as_closed()
             
             try:
+                # Keep asyncio.wait_for() only for close operation as required
                 await asyncio.wait_for(
                     self._websocket.close(code=code, reason=reason),
                     timeout=self._operation_timeout
@@ -302,6 +361,7 @@ class WebSocket:
                 logger.debug(f"WebSocket connection closed gracefully with code {code}")
                 
             except asyncio.TimeoutError as e:
+                error_metrics.increment('timeout')
                 logger.warning(f"WebSocket close operation timed out after {self._operation_timeout} seconds")
             
             except asyncio.CancelledError:
@@ -322,10 +382,12 @@ class WebSocket:
     
     @property
     def closed(self) -> bool:
+        """Lock-free connection state check"""
         return self._is_closed
     
     @property  
     def is_closed(self) -> bool:
+        """Lock-free connection state check"""
         return self._is_closed
     
     @property

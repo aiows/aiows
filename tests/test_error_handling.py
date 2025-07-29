@@ -134,10 +134,12 @@ class TestWebSocketErrorHandling:
         assert websocket_wrapper._error_count == 1
         assert websocket_wrapper.closed
         
-        websocket_wrapper._is_closed = False
-        websocket_wrapper._websocket.send = AsyncMock()
+        # Use the testing method to reset connection state
+        websocket_wrapper._reset_connection_state_for_testing()
         
+        websocket_wrapper._websocket.send = AsyncMock()
         await websocket_wrapper.send("test2")
+        
         assert websocket_wrapper._error_count == 0
     
     @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 import asyncio
 import time
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 from typing import List, Optional
 
 from aiows.middleware.connection_limiter import ConnectionLimiterMiddleware
@@ -9,27 +9,23 @@ from aiows.websocket import WebSocket
 
 
 class MockWebSocket(WebSocket):
-    def __init__(self, remote_ip: str = "127.0.0.1", headers: Optional[dict] = None):
-        self.remote_ip = remote_ip
-        self.headers = headers or {}
-        self.context = {}
-        self._is_closed = False
-        self._close_code = None
-        self._close_reason = None
+    def __init__(self, remote_ip: str = "127.0.0.1"):
+        mock_ws = Mock()
+        mock_ws.remote_address = (remote_ip, 12345)
+        super().__init__(mock_ws)
         
-        mock_websocket = MagicMock()
-        mock_websocket.remote_address = (remote_ip, 12345)
-        mock_websocket.request = MagicMock()
-        mock_websocket.request.remote = (remote_ip, 12345)
-        mock_websocket.host = remote_ip
+        # Initialize connection state properly for the new Event-based system
+        # No need to manually set _is_closed since it's now managed by asyncio.Event
         
-        super().__init__(mock_websocket)
-        self.context = {}
+        self.send_data = []
+        self.close_code = None
+        self.close_reason = None
     
     async def close(self, code: int = 1000, reason: str = ""):
-        self._is_closed = True
-        self._close_code = code
-        self._close_reason = reason
+        # Call parent close method to properly mark as closed
+        await super().close(code, reason)
+        self.close_code = code
+        self.close_reason = reason
 
 
 class TestConnectionLimiterMiddleware:
@@ -167,7 +163,7 @@ class TestConnectionLimiterMiddleware:
         
         assert result == "handler_result"
         assert mock_handler.called
-        assert not ws._is_closed
+        assert not ws.close_code
         assert ws.context['connection_limiter']['ip'] == "192.168.1.50"
         assert ws.context['connection_limiter']['bypassed'] is False
         
@@ -182,7 +178,7 @@ class TestConnectionLimiterMiddleware:
         
         assert result == "handler_result"
         assert mock_handler.called
-        assert not ws._is_closed
+        assert not ws.close_code
         assert ws.context['connection_limiter']['bypassed'] is True
         assert ws.context['connection_limiter']['reason'] == 'whitelisted'
     
@@ -197,7 +193,7 @@ class TestConnectionLimiterMiddleware:
         
         assert result == "handler_result"
         assert mock_handler.called
-        assert not ws._is_closed
+        assert not ws.close_code
         assert ws.context['connection_limiter']['ip'] == 'unknown'
         assert ws.context['connection_limiter']['bypassed'] is True
         assert ws.context['connection_limiter']['reason'] == 'ip_detection_failed'
@@ -212,9 +208,8 @@ class TestConnectionLimiterMiddleware:
         ws = MockWebSocket(ip)
         result = await middleware.on_connect(mock_handler, ws)
         
-        assert ws._is_closed
-        assert ws._close_code == 4008
-        assert "Too many concurrent connections" in ws._close_reason
+        assert ws.close_code == 4008
+        assert "Too many concurrent connections" in ws.close_reason
         assert not mock_handler.called
         assert result is None
     
@@ -228,9 +223,8 @@ class TestConnectionLimiterMiddleware:
         ws = MockWebSocket(ip)
         result = await middleware.on_connect(mock_handler, ws)
         
-        assert ws._is_closed
-        assert ws._close_code == 4008
-        assert "Connection rate limit exceeded" in ws._close_reason
+        assert ws.close_code == 4008
+        assert "Connection rate limit exceeded" in ws.close_reason
         assert not mock_handler.called
         assert result is None
     
@@ -354,7 +348,7 @@ class TestConnectionLimiterMiddleware:
                 ws = MockWebSocket(ip)
                 result = await middleware.on_connect(mock_handler, ws)
                 assert result == "success"
-                assert not ws._is_closed
+                assert not ws.close_code
                 
                 await asyncio.sleep(0.1)
         
