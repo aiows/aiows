@@ -160,7 +160,8 @@ class WebSocketServer:
         self.dispatcher: MessageDispatcher = MessageDispatcher(self.router)
         
         self._connections: Set[WebSocket] = set()
-        self._connection_count: int = 0
+        # RC-2: _connection_count removed. len(self._connections) is the single
+        # source of truth; a separate counter can silently drift.
         self._total_connections: int = 0
         self._connections_lock: asyncio.Lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
@@ -195,11 +196,9 @@ class WebSocketServer:
         return self._total_connections
     
     def get_connection_stats(self) -> Dict[str, int]:
-        active_count = len(self._connections)
         return {
-            'active_connections': active_count,
+            'active_connections': len(self._connections),
             'total_connections': self._total_connections,
-            'connection_count_tracked': self._connection_count
         }
     
     def get_backpressure_stats(self) -> Dict[str, Any]:
@@ -273,19 +272,11 @@ class WebSocketServer:
                         logger.debug(f"Error checking connection state: {e}")
                         dead_connections.append(ws)
                 
-                removed_count = 0
                 for ws in dead_connections:
-                    if ws in self._connections:
-                        self._connections.discard(ws)
-                        removed_count += 1
-                
-                self._connection_count = max(0, self._connection_count - removed_count)
-                
-                if __debug__:
-                    assert len(self._connections) == self._connection_count, f"Connection count mismatch after cleanup: {len(self._connections)} != {self._connection_count}"
-                
-                if removed_count > 0:
-                    logger.debug(f"Cleaned up {removed_count} dead connections")
+                    self._connections.discard(ws)
+
+                if dead_connections:
+                    logger.debug(f"Cleaned up {len(dead_connections)} dead connections")
                 
         except Exception as e:
             logger.warning(f"Error during dead connection cleanup: {e}")
@@ -294,12 +285,7 @@ class WebSocketServer:
         try:
             async with self._connections_lock:
                 self._connections.add(ws)
-                self._connection_count += 1
                 self._total_connections += 1
-                
-                if __debug__:
-                    assert len(self._connections) == self._connection_count, f"Connection count mismatch after add: {len(self._connections)} != {self._connection_count}"
-                
                 logger.debug(f"Added connection, active: {len(self._connections)}, total: {self._total_connections}")
         except Exception as e:
             logger.warning(f"Error adding connection: {e}")
@@ -309,11 +295,6 @@ class WebSocketServer:
             async with self._connections_lock:
                 if ws in self._connections:
                     self._connections.discard(ws)
-                    self._connection_count = max(0, self._connection_count - 1)
-                    
-                    if __debug__:
-                        assert len(self._connections) == self._connection_count, f"Connection count mismatch after remove: {len(self._connections)} != {self._connection_count}"
-                    
                     logger.debug(f"Removed connection, active: {len(self._connections)}")
         except Exception as e:
             logger.warning(f"Error removing connection: {e}")
@@ -516,16 +497,19 @@ class WebSocketServer:
             if remaining > 0:
                 logger.warning(f"{remaining} connections did not close gracefully")
                 self._connections.clear()
-                self._connection_count = 0
             else:
                 logger.info("All connections closed successfully")
     
     async def _close_connection_gracefully(self, ws: WebSocket) -> None:
-        try:
-            await self.dispatcher.dispatch_disconnect(ws, "Server shutdown")
-        except Exception as e:
-            logger.debug(f"Error in disconnect handler: {e}")
-        
+        # RC-1: exactly-once dispatch_disconnect. Check-then-set is atomic in
+        # asyncio's single-threaded model (no await between the two statements).
+        if not ws._disconnect_dispatched:
+            ws._disconnect_dispatched = True
+            try:
+                await self.dispatcher.dispatch_disconnect(ws, "Server shutdown")
+            except Exception as e:
+                logger.debug(f"Error in disconnect handler: {e}")
+
         try:
             if not ws.closed:
                 await ws.close(code=1001, reason="Server shutdown")
@@ -540,8 +524,7 @@ class WebSocketServer:
             
             async with self._connections_lock:
                 self._connections.clear()
-                self._connection_count = 0
-            
+
             if hasattr(CertificateManager, 'cleanup_temp_files'):
                 CertificateManager.cleanup_temp_files()
             
@@ -565,11 +548,10 @@ class WebSocketServer:
         self._update_dispatcher_middleware()
     
     def _update_dispatcher_middleware(self) -> None:
-        self.dispatcher._middleware.clear()
-        
+        # Reset to empty tuple (RC-3: _middleware is now immutable tuple).
+        self.dispatcher._middleware = ()
         for middleware in self._middleware:
             self.dispatcher.add_middleware(middleware)
-        
         for middleware in self.router.get_all_middleware():
             self.dispatcher.add_middleware(middleware)
     
@@ -627,8 +609,12 @@ class WebSocketServer:
             if connection_added:
                 async with self._connections_lock:
                     in_connections = ws_wrapper in self._connections
-                
-                if in_connections:
+
+                # RC-1: exactly-once dispatch_disconnect. The flag is checked and
+                # set atomically (no await in between) so a concurrent call from
+                # _close_connection_gracefully will see it already set and skip.
+                if in_connections and not ws_wrapper._disconnect_dispatched:
+                    ws_wrapper._disconnect_dispatched = True
                     reason = "Server shutdown" if self._shutdown_event.is_set() else "Connection closed"
                     try:
                         await self.dispatcher.dispatch_disconnect(ws_wrapper, reason)

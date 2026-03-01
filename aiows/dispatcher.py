@@ -4,7 +4,6 @@ Event dispatcher implementation
 
 import asyncio
 import logging
-import threading
 import time
 from .router import Router
 from .websocket import WebSocket  
@@ -14,7 +13,7 @@ from .exceptions import (
     ErrorCategory, ErrorContext, ErrorCategorizer
 )
 from .middleware.base import BaseMiddleware
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 
 class DispatcherErrorMetrics:
@@ -60,22 +59,23 @@ class MessageDispatcher:
     
     def __init__(self, router: Router):
         self.router = router
-        self._middleware: List[BaseMiddleware] = []
-        self._middleware_lock = threading.Lock()
+        # RC-3: _middleware is stored as an immutable tuple so any read of
+        # self._middleware is a safe atomic snapshot without a lock.
+        # Mutations (add/remove) replace the entire tuple, which is an atomic
+        # pointer assignment in CPython (GIL-protected).
+        self._middleware: Tuple[BaseMiddleware, ...] = ()
         self.logger = logging.getLogger("aiows.dispatcher")
         self._consecutive_errors = 0
-    
+
     def add_middleware(self, middleware: BaseMiddleware) -> None:
-        with self._middleware_lock:
-            self._middleware.append(middleware)
-    
+        self._middleware = self._middleware + (middleware,)
+
     def remove_middleware(self, middleware: BaseMiddleware) -> bool:
-        with self._middleware_lock:
-            try:
-                self._middleware.remove(middleware)
-                return True
-            except ValueError:
-                return False
+        new_middleware = tuple(m for m in self._middleware if m is not middleware)
+        if len(new_middleware) == len(self._middleware):
+            return False
+        self._middleware = new_middleware
+        return True
     
     def _create_error_context(self, operation: str, websocket: Optional[WebSocket] = None, 
                              additional_context: Optional[Dict[str, Any]] = None) -> ErrorContext:
@@ -363,22 +363,13 @@ class MessageDispatcher:
         await next_handler(*args)
 
     async def dispatch_connect(self, websocket: WebSocket) -> None:
-        with self._middleware_lock:
-            middleware_snapshot = tuple(self._middleware)
-        
-        await self._execute_middleware_chain(EventType.CONNECT, middleware_snapshot, websocket)
+        await self._execute_middleware_chain(EventType.CONNECT, self._middleware, websocket)
 
     async def dispatch_disconnect(self, websocket: WebSocket, reason: str) -> None:
-        with self._middleware_lock:
-            middleware_snapshot = tuple(self._middleware)
-        
-        await self._execute_middleware_chain(EventType.DISCONNECT, middleware_snapshot, websocket, reason)
+        await self._execute_middleware_chain(EventType.DISCONNECT, self._middleware, websocket, reason)
 
     async def dispatch_message(self, websocket: WebSocket, message_data: dict) -> None:
-        with self._middleware_lock:
-            middleware_snapshot = tuple(self._middleware)
-        
-        await self._execute_middleware_chain(EventType.MESSAGE, middleware_snapshot, websocket, message_data)
+        await self._execute_middleware_chain(EventType.MESSAGE, self._middleware, websocket, message_data)
     
     @property
     def error_metrics(self) -> DispatcherErrorMetrics:

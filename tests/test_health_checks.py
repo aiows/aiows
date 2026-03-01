@@ -19,9 +19,10 @@ from aiows.health import (
 
 class MockWebSocketServer:
     """Mock WebSocket server for testing"""
-    
+
     def __init__(self, connection_count=0, total_connections=0, middleware=None):
-        self._connection_count = connection_count
+        # Use a set so len() works the same way as the real server (RC-2 fix).
+        self._connections = set(range(connection_count))
         self._total_connections = total_connections
         self._middleware = middleware or []
 

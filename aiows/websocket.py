@@ -298,7 +298,12 @@ class WebSocket:
         self._receive_lock = asyncio.Lock()
         
         self._close_lock = asyncio.Lock()
-        
+
+        # Exactly-once disconnect dispatch guard (RC-1).
+        # Set to True by the first caller (server's _handle_connection or
+        # _close_connection_gracefully) so that the second caller is a no-op.
+        self._disconnect_dispatched: bool = False
+
         self._operation_timeout = operation_timeout
         self._max_message_size = max_message_size
         self._error_count = 0
@@ -410,11 +415,15 @@ class WebSocket:
         return self._is_closed_event.is_set()
     
     def _mark_as_closed(self):
+        # RC-4: guard against re-entry. asyncio is single-threaded, so the
+        # check-then-set sequence is atomic (no await between the two lines).
+        if self._is_closed_event.is_set():
+            return
         self._is_closed_event.set()
-        
+
         if self._send_task and not self._send_task.done():
             self._send_task.cancel()
-        
+
         if self._backpressure_manager:
             self._backpressure_manager.cleanup()
     
