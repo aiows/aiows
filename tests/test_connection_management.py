@@ -26,17 +26,15 @@ class TestConnectionManagement:
     def test_set_initialization(self, server):
         assert isinstance(server._connections, set)
         assert len(server._connections) == 0
-        assert server._connection_count == 0
         assert server._total_connections == 0
-    
+
     def test_connection_tracking_methods(self, server):
         assert server.get_active_connections_count() == 0
         assert server.get_total_connections_count() == 0
-        
+
         stats = server.get_connection_stats()
         assert stats['active_connections'] == 0
         assert stats['total_connections'] == 0
-        assert stats['connection_count_tracked'] == 0
     
     @pytest.mark.asyncio
     async def test_add_remove_connection(self, server, mock_websocket):
@@ -44,13 +42,11 @@ class TestConnectionManagement:
         
         await server._add_connection(ws_wrapper)
         assert len(server._connections) == 1
-        assert server._connection_count == 1
         assert server._total_connections == 1
         assert server.get_active_connections_count() == 1
-        
+
         await server._remove_connection(ws_wrapper)
         assert len(server._connections) == 0
-        assert server._connection_count == 0
         assert server._total_connections == 1
     
     @pytest.mark.asyncio
@@ -79,15 +75,13 @@ class TestConnectionManagement:
             await server._add_connection(ws_wrapper)
         
         assert len(server._connections) == 3
-        assert server._connection_count == 3
-        
+
         connections[0]._mark_as_closed()
         connections[1]._mark_as_closed()
-        
+
         await server._cleanup_dead_connections()
-        
+
         assert len(server._connections) == 1
-        assert server._connection_count == 1
         assert connections[2] in server._connections
     
     @pytest.mark.asyncio
@@ -182,15 +176,13 @@ class TestConnectionManagement:
         stats = server.get_connection_stats()
         assert stats['active_connections'] == 5
         assert stats['total_connections'] == 5
-        assert stats['connection_count_tracked'] == 5
-        
+
         for i in range(2):
             await server._remove_connection(connections[i])
-        
+
         stats = server.get_connection_stats()
         assert stats['active_connections'] == 3
         assert stats['total_connections'] == 5
-        assert stats['connection_count_tracked'] == 3
     
     @pytest.mark.asyncio
     async def test_memory_leak_prevention(self, server):
@@ -207,7 +199,6 @@ class TestConnectionManagement:
         gc.collect()
         
         assert len(server._connections) == initial_count
-        assert server._connection_count == 0
         assert server._total_connections == 100
     
     @pytest.mark.asyncio
@@ -282,7 +273,6 @@ class TestConnectionMemoryManagement:
         gc.collect()
         
         assert len(server._connections) == initial_connections
-        assert server._connection_count == 0
     
     @pytest.mark.asyncio
     async def test_set_handles_circular_references(self, server):

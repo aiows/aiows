@@ -95,7 +95,7 @@ class ConnectionsHealthCheck(HealthCheck):
     
     async def check(self) -> HealthStatus:
         try:
-            connection_count = getattr(self.server, '_connection_count', 0)
+            connection_count = len(getattr(self.server, '_connections', set()))
             total_connections = getattr(self.server, '_total_connections', 0)
             
             details = {

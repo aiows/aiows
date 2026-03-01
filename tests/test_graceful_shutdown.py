@@ -79,11 +79,13 @@ class TestGracefulShutdown:
         mock_ws1 = Mock()
         mock_ws1.closed = False
         mock_ws1.close = AsyncMock()
-        
+        mock_ws1._disconnect_dispatched = False
+
         mock_ws2 = Mock()
         mock_ws2.closed = False
         mock_ws2.close = AsyncMock()
-        
+        mock_ws2._disconnect_dispatched = False
+
         server._connections = {mock_ws1, mock_ws2}
         
         server.dispatcher.dispatch_disconnect = AsyncMock()
@@ -100,16 +102,17 @@ class TestGracefulShutdown:
     async def test_shutdown_timeout_behavior(self, server):
         slow_ws = Mock()
         slow_ws.closed = False
-        
+        slow_ws._disconnect_dispatched = False
+
         call_count = 0
         async def slow_close(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
                 await asyncio.sleep(10)
-                
+
         slow_ws.close = slow_close
-        
+
         server._connections = {slow_ws}
         server.dispatcher.dispatch_disconnect = AsyncMock()
         
@@ -142,7 +145,8 @@ class TestGracefulShutdown:
         mock_ws = Mock()
         mock_ws.closed = False
         mock_ws.close = AsyncMock()
-        
+        mock_ws._disconnect_dispatched = False
+
         server._connections = {mock_ws}
         server.dispatcher.dispatch_disconnect = AsyncMock()
         
@@ -159,7 +163,8 @@ class TestGracefulShutdown:
         mock_ws = Mock()
         mock_ws.closed = False
         mock_ws.close = AsyncMock(side_effect=Exception("Close failed"))
-        
+        mock_ws._disconnect_dispatched = False
+
         server._connections = {mock_ws}
         server.dispatcher.dispatch_disconnect = AsyncMock(
             side_effect=Exception("Disconnect failed")
@@ -181,13 +186,14 @@ class TestGracefulShutdown:
         for i in range(3):
             mock_ws = Mock()
             mock_ws.closed = False
-            
+            mock_ws._disconnect_dispatched = False
+
             call_counts = {'count': 0}
             async def slow_close(*args, **kwargs):
                 call_counts['count'] += 1
                 if call_counts['count'] == 1:
                     await asyncio.sleep(10)
-                
+
             mock_ws.close = slow_close
             slow_connections.append(mock_ws)
             

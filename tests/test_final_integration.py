@@ -444,8 +444,10 @@ class TestErrorHandlingIntegration(unittest.IsolatedAsyncioTestCase):
     def test_health_monitoring_with_server_errors(self):
         """Test health monitoring works even with server errors"""
         server = Mock()
-        server._connection_count = None
-        
+        # _connections is now a set; set spec=None so len() raises TypeError
+        # which health.py handles gracefully (returns 0).
+        server._connections = None
+
         health_checker = HealthChecker(server)
         
         self.assertIsNotNone(health_checker)
